@@ -18,6 +18,7 @@ jinja2
 numpy
 optax
 pandas
+python-dotenv
 scipy
 safetensors
 submitit

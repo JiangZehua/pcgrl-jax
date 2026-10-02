@@ -19,7 +19,7 @@ from models import ActorCritic, ActorCriticPCGRL, ActorCriticPlayPCGRL, AutoEnco
 
 def get_exp_dir_evo_map(config: EvoMapConfig):
     exp_dir = os.path.join(
-        'saves_evo_map',
+        config.save_dir,
         config.problem,
         f'pop-{config.evo_pop_size}_' + 
         f'parents-{config.n_parents}_' +
@@ -36,11 +36,16 @@ def is_default_hiddims(config: Config):
 
 
 def get_exp_dir(config: Config):
+    save_dir = config.save_dir
+    if config.sweep_name is not None:
+        save_dir = os.path.join(save_dir, config.sweep_name)
     if config.env_name == 'PCGRL':
         ctrl_str = '_ctrl_' + '_'.join(config.ctrl_metrics) if len(config.ctrl_metrics) > 0 else '' 
         exp_dir = os.path.join(
-            'saves',
-            f'{config.problem}{ctrl_str}_{config.representation}_{config.model}-' +
+            save_dir,
+            f'{config.problem}{ctrl_str}_{config.representation}_' + \
+            ('randCoords_' if config.representation == 'narrow' and config.rand_narrow_coords else "") + \
+            f'{config.model}-' + \
             f'{config.activation}_w-{config.map_width}_' + \
             ('random-shape_' if config.randomize_map_shape else '') + \
             f'vrf-{config.vrf_size}_' + \
@@ -53,6 +58,7 @@ def get_exp_dir(config: Config):
             f'fz-{config.n_freezies}_' + \
             f'act-{"x".join([str(e) for e in config.act_shape])}_' + \
             f'nag-{config.n_agents}_' + \
+            (f'ag-rewfrq-{config.per_agent_reward_freq}_' if config.multiagent and config.per_agent_reward_freq > 0 else '') + \
             ('afreezer_' if config.multiagent and config.a_freezer else '') + \
             (f'rewfrq-{config.reward_freq}_' if config.reward_freq > 1 else '') + \
             ('empty-start_' if config.empty_start else '') + \
@@ -62,7 +68,7 @@ def get_exp_dir(config: Config):
             f'{config.seed}_{config.exp_name}')
     elif config.env_name == 'PlayPCGRL':
         exp_dir = os.path.join(
-            'saves',
+            config.save_dir,
             f'play_w-{config.map_width}_' + \
             f'{config.model}-{config.activation}_' + \
             f'vrf-{config.vrf_size}_arf-{config.arf_size}_' + \
@@ -70,13 +76,13 @@ def get_exp_dir(config: Config):
         )
     elif config.env_name == 'Candy':
         exp_dir = os.path.join(
-            'saves',
+            config.save_dir,
             'candy_' + \
             f'{config.seed}_{config.exp_name}',
         )
     else:
         exp_dir = os.path.join(
-            'saves',
+            config.save_dir,
             config.env_name,
         )
     return exp_dir
@@ -228,6 +234,7 @@ def get_env_params_from_config(config: Config):
     env_params = PCGRLEnvParams(
         problem=problem,
         representation=int(RepEnum[config.representation.upper()]),
+        rand_narrow_coords=config.rand_narrow_coords,
         map_shape=map_shape,
         rf_shape=rf_shape,
         act_shape=act_shape,
@@ -248,6 +255,13 @@ def get_env_params_from_config(config: Config):
     )
     return env_params
 
+def get_env_params_from_config_ma(config: MultiAgentConfig):
+    env_params = get_env_params_from_config(config)
+    env_params = env_params.replace(
+        per_agent_reward_freq=config.per_agent_reward_freq,
+    )
+    return env_params
+
 
 def get_play_env_params_from_config(config: Config):
     map_shape = (config.map_width, config.map_width)
@@ -260,6 +274,7 @@ def get_play_env_params_from_config(config: Config):
     )
 
 def gymnax_pcgrl_make(env_name, config: Config, **env_kwargs):
+    assert config.vrf_size != -1, "Have you forgotten to call `init_config(cfg)`?"
     if env_name in gymnax.registered_envs:
         return gymnax.make(env_name)
 

@@ -2,6 +2,7 @@
 Based on PureJaxRL Implementation of IPPO, with changes to give a centralised critic.
 """
 import dataclasses
+from timeit import default_timer as timer
 from functools import partial
 import os
 import shutil
@@ -24,7 +25,7 @@ from omegaconf import OmegaConf
 from envs.pcgrl_env import PCGRLEnv
 from marl.model import ActorRNN, CriticRNN, ScannedRNN
 from conf.config import MultiAgentConfig
-from ma_utils import RunnerState, batchify, init_config, init_run, ma_init_config, make_sim_render_episode, render_callback, restore_run, save_checkpoint, unbatchify
+from utils_ma import RunnerState, batchify, init_config, init_run, ma_init_config, make_sim_render_episode, render_callback, restore_run, save_checkpoint, unbatchify
 from utils import get_env_params_from_config, init_network
 
 class Transition(NamedTuple):
@@ -55,6 +56,11 @@ def make_train(
 
     # Define which parts of the callback we don't want to trace
     _render_callback = partial(render_callback, save_dir=config._vid_dir, max_steps=env.max_steps, env=env)
+
+    # Track host-side timing to compute FPS between updates (env steps per second)
+    # Using simple mutable containers to allow updates from inside the callback.
+    _last_log_time = [timer()]
+    _last_env_step = [int(latest_update_step or 0) * int(config.n_envs)]
 
     def train(rng, runner_state=None):
 
@@ -126,6 +132,7 @@ def make_train(
                     cr_hstate, value = critic_network.apply(train_states[1].params, hstates[1], cr_in)
                     hstates = (ac_hstate, cr_hstate)
                 else:
+                    # Decentralized critic
                     # obs_batch = jax.tree.map(lambda x: x[np.newaxis], obs_batch)
                     # obs_batch_in = obs_batch.replace(flat_obs = obs_batch.flat_obs[..., np.newaxis])
                     pi, value = network.apply(train_states[0].params, obs_batch, avail_actions)
@@ -503,6 +510,14 @@ def make_train(
             rng = update_state[-1]
             
             def log_callback(metric):
+                # Compute FPS from host wall time and env steps progressed since last log
+                now = timer()
+                env_step = int(metric["update_steps"]) * config.num_steps * int(config.n_envs)
+                dt = max(now - _last_log_time[0], 1e-9)
+                dsteps = max(env_step - _last_env_step[0], 0)
+                fps = dsteps / dt
+                _last_log_time[0] = now
+                _last_env_step[0] = env_step
                 wandb.log(
                     {
                         # the metrics have an agent dimension, but this is identical
@@ -510,8 +525,8 @@ def make_train(
                         "returns": metric["returned_episode_returns"][:, :, 0][
                             metric["returned_episode"][:, :, 0]
                         ].mean(),
-                        "env_step": metric["update_steps"]
-                        * config._num_actors,
+                        "env_step": env_step,
+                        "fps": fps,
                         **metric["loss"],
                         "obs_dist_min": metric["obs_dist_min"],
                         "obs_dist_max": metric["obs_dist_max"],
@@ -520,8 +535,19 @@ def make_train(
                         "act_dist_std": metric["act_dist_std"],
                     }
                 )
+                returns = metric["returned_episode_returns"][:, :, 0][
+                    metric["returned_episode"][:, :, 0]
+                ]
+                returns_mean = returns.mean()
+                # returns_max = returns.max()
+                # returns_min = returns.min()
 
-                print(f"Step: {metric['update_steps']}, Returns: {metric['returned_episode_returns'][:, :, 0][metric['returned_episode'][:, :, 0]].mean()}")
+                print(
+                    f"Update step: {metric['update_steps']}, Env step: {env_step}, Returns mean: "
+                    f"{returns_mean}, "
+                    # f"Returns max: {returns_max}, Returns min: {returns_min}, "
+                    f"FPS: {fps:,.1f}"
+                )
 
             def ckpt_callback(metric, runner_state):
                 try:
@@ -588,7 +614,7 @@ def main(config: MultiAgentConfig):
     
     if latest_update_step is not None:
         runner_state, wandb_run_id = restore_run(config, runner_state, checkpoint_manager, latest_update_step)
-        wandb_resume = "Must"
+        wandb_resume = "must"
     else:
         wandb_run_id, wandb_resume = None, None
 
@@ -598,10 +624,10 @@ def main(config: MultiAgentConfig):
     os.makedirs(config._vid_dir, exist_ok=True)
 
     run = wandb.init(
-        project=config.PROJECT,
+        project=config.wandb_project,
         tags=["MAPPO"],
         config=OmegaConf.to_container(config),
-        mode=config.WANDB_MODE,
+        mode=config.wandb_mode,
         dir=config._exp_dir,
         id=wandb_run_id,
         resume=wandb_resume,

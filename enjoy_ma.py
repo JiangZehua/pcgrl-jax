@@ -13,13 +13,13 @@ from conf.config import EnjoyConfig, EnjoyMultiAgentConfig
 from envs.pcgrl_env import PCGRLEnv, render_stats, gen_dummy_queued_state
 from envs.probs.problem import get_loss
 from eval import get_eval_name, init_config_for_eval
-from ma_utils import MALogWrapper, MultiAgentWrapper, batchify, init_run, ma_init_config, make_sim_render_episode, render_callback, restore_run
+from utils_ma import MALogWrapper, MultiAgentWrapper, batchify, init_run, ma_init_config, make_sim_render_episode, render_callback, restore_run
 from marl.model import ScannedRNN
 from purejaxrl.experimental.s5.wrappers import LossLogWrapper
 from utils import get_exp_dir, init_network, gymnax_pcgrl_make, init_config
 
 
-@hydra.main(config_path='./conf', config_name='enjoy_ma_pcgrl', version_base="1.3")
+@hydra.main(version_base="1.3", config_path='./conf', config_name='enjoy_ma_pcgrl')
 def main_enjoy_ma(enjoy_config: EnjoyMultiAgentConfig):
     # enjoy_config = init_config(enjoy_config)
     ma_init_config(enjoy_config)
@@ -40,7 +40,6 @@ def main_enjoy_ma(enjoy_config: EnjoyMultiAgentConfig):
 
         assert latest_update_step is not None
         runner_state, wandb_run_id = restore_run(enjoy_config, runner_state, checkpoint_manager, latest_update_step)
-        wandb_resume = "Must"
         network_params = runner_state.train_states[0].params
     else:
         if not os.path.exists(exp_dir):
@@ -75,6 +74,7 @@ def main_enjoy_ma(enjoy_config: EnjoyMultiAgentConfig):
     enjoy_vid_dir = os.path.join(exp_dir, 'enjoy')
     os.makedirs(enjoy_vid_dir, exist_ok=True)
     imageio.mimsave(os.path.join(enjoy_vid_dir, f"enjoy_{t}.gif"), np.array(frames), fps=20, loop=0)
+    print(f"Saved enjoy video to {os.path.join(enjoy_vid_dir, f'enjoy_{t}.gif')}")
 
 if __name__ == '__main__':
     main_enjoy_ma()

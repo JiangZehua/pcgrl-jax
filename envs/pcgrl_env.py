@@ -98,6 +98,7 @@ class PCGRLEnvParams:
     multiagent: bool = False
     problem: int = ProbEnum.BINARY
     representation: int = RepEnum.NARROW
+    rand_narrow_coords: bool = False
     map_shape: Tuple[int, int] = (16, 16)
     act_shape: Tuple[int, int] = (1, 1)
     rf_shape: Tuple[int, int] = (31, 31)
@@ -114,6 +115,7 @@ class PCGRLEnvParams:
     reward_freq: int = 1
     pinpoints: bool = False
     flatten_obs: bool = False
+    per_agent_reward_freq: int = -1
 
 
 def gen_static_tiles(rng, static_tile_prob, n_freezies, map_shape):
@@ -182,9 +184,12 @@ class PCGRLEnv(Environment):
     pinpoints = False
 
     def __init__(self, env_params: PCGRLEnvParams):
-        map_shape, act_shape, rf_shape, problem, representation, static_tile_prob, n_freezies, n_agents = (
-            env_params.map_shape, env_params.act_shape, env_params.rf_shape, env_params.problem,
-            env_params.representation, env_params.static_tile_prob, env_params.n_freezies, env_params.n_agents)
+        map_shape, act_shape, rf_shape, problem, representation, static_tile_prob, n_freezies, n_agents, \
+            self.per_agent_reward_freq = (
+                env_params.map_shape, env_params.act_shape, env_params.rf_shape, env_params.problem,
+                env_params.representation, env_params.static_tile_prob, env_params.n_freezies, env_params.n_agents,
+                env_params.per_agent_reward_freq
+        )
 
         self.multiagent = env_params.multiagent
         self.a_freezer = env_params.a_freezer
@@ -221,6 +226,7 @@ class PCGRLEnv(Environment):
                                             max_board_scans=env_params.max_board_scans,
                                             pinpoints=self.pinpoints,
                                             tile_nums=self.prob.tile_nums,
+                                            rand_coords=env_params.rand_narrow_coords,
             )
         elif representation == RepEnum.NCA:
             self.rep = NCARepresentation(env_map=env_map, rf_shape=rf_shape,
@@ -381,64 +387,85 @@ class PCGRLEnv(Environment):
             env_map=env_map, static_map=env_state.static_map,
             rep_state=rep_state, done=done, reward=reward,
             prob_state=prob_state, step_idx=step_idx, pct_changed=pct_changed, queued_state=env_state.queued_state)
-
+        prob_stats_dict = {name: env_state.prob_state.stats[i] for i, name in enumerate(self.prob.metric_names)}
+        info = {
+            "discount": self.discount(env_state, env_params),
+            "prob_stats": prob_stats_dict,
+            }
         return (
             jax.lax.stop_gradient(obs),
             jax.lax.stop_gradient(env_state),
             reward,
             done,
-            {"discount": self.discount(env_state, env_params)},
+            info,
         )
+
+    def compute_reward(self, env_state, env_params, last_prob_state, last_rewarded_env_map, new_env_map):
+        n_tiles_changed = jnp.sum(jnp.where(last_rewarded_env_map != new_env_map, 1, 0))
+        map_changed = n_tiles_changed > 0
+        pct_changed = n_tiles_changed / math.prod(self.map_shape)
+        reward, prob_state = jax.lax.cond(
+            jnp.logical_and(map_changed, (env_state.step_idx % env_params.reward_freq == 0)),
+            lambda: self.prob.step(new_env_map, last_prob_state),
+            lambda: (0., last_prob_state),
+        )
+        return reward, prob_state, pct_changed
 
     @partial(jax.jit, static_argnums=(0,))
     def step_env_ma(self, rng, env_state: PCGRLEnvState, action, env_params: PCGRLEnvParams):
-        env_map = env_state.env_map
+        last_rewarded_env_map = prev_env_map = new_env_map = env_state.env_map
+        last_prob_state = env_state.prob_state
         rep_state = env_state.rep_state
         static_map = env_state.static_map
-        map_changed = False
+        compute_reward_every = len(self.agents) if self.per_agent_reward_freq == -1 else self.per_agent_reward_freq
+        ma_reward = {}
+        last_rewarded_agent_idx = 0
+        pct_changed = env_state.pct_changed
+        reward = 0
+
 
         for i, agent in enumerate(self.agents):
             agent_action = action[agent][None, None, ..., None]
 
             new_env_map, rep_state = self.rep.step(
-                env_map=env_map, action=agent_action,
+                env_map=new_env_map, action=agent_action,
                 rep_state=rep_state, step_idx=env_state.step_idx, agent_id=i
             )
             # TODO: static map might be affected by one of these agent actions
 
             # If the freezer is taking an action, all its changes are frozen
             if self.a_freezer and i == 0:
-                static_map = jnp.logical_or(static_map, new_env_map != env_map)
+                static_map = jnp.logical_or(static_map, new_env_map != prev_env_map)
                 
             # Otherwise, changes cannot be made to previously frozen tiles
             else:
                 new_env_map = jnp.where(static_map == 1,
-                                    env_map, new_env_map,
+                                    prev_env_map, new_env_map,
                 )
 
+            if ((i + 1) % compute_reward_every == 0) or (i == len(self.agents) - 1):
+                reward_i, last_prob_state, pct_changed_i = self.compute_reward(
+                    env_state, env_params, last_prob_state, last_rewarded_env_map, new_env_map
+                )
+                for j in range(last_rewarded_agent_idx, i + 1):
+                    ma_reward[self.agents[j]] = reward_i
+                last_rewarded_agent_idx = i + 1
+                reward += reward_i
+                pct_changed += pct_changed_i
+                last_rewarded_env_map = new_env_map
 
-            env_map = new_env_map
+            prev_env_map = new_env_map
 
-        n_tiles_changed = jnp.sum(jnp.where(env_map != env_state.env_map, 1, 0))
-        map_changed = n_tiles_changed > 0
-        pct_changed = n_tiles_changed / math.prod(self.map_shape)
-        pct_changed = env_state.pct_changed + pct_changed
-        reward, prob_state = jax.lax.cond(
-            jnp.logical_and(map_changed, (env_state.step_idx % env_params.reward_freq == 0)),
-            lambda new_env_map: self.prob.step(new_env_map, env_state.prob_state),
-            lambda _: (0., env_state.prob_state),
-            env_map,
-        )
         obs = self.get_obs(
-            env_map=env_map, frz_map=static_map,
-            rep_state=rep_state, prob_state=prob_state)
+            env_map=prev_env_map, frz_map=static_map,
+            rep_state=rep_state, prob_state=last_prob_state)
         step_idx = env_state.step_idx + 1
-        env_state = env_state.replace(env_map=env_map, rep_state=rep_state, reward=reward, prob_state=prob_state, step_idx=step_idx, pct_changed=pct_changed,
+        env_state = env_state.replace(env_map=prev_env_map, rep_state=rep_state, reward=reward, prob_state=last_prob_state,
+                                      step_idx=step_idx, pct_changed=pct_changed,
                                       static_map=static_map)
         done = self.is_terminal(env_state, env_params)
         env_state = env_state.replace(done=done)
 
-        ma_reward = {agent: reward for agent in self.agents}
         ma_done = {agent: done for agent in self.agents}
         ma_done['__all__'] = done
         info = {}
@@ -466,6 +493,24 @@ class PCGRLEnv(Environment):
             env_map=env_state.env_map,
             prob_state=env_state.prob_state)
         return render_map(self, env_state, path_coords_tpl)
+
+    def render_obs(self, obs: PCGRLObs):
+        obs_map = obs.map_obs[..., :len(self.prob.tile_probs)]
+        obs_map = obs_map.argmax(-1)
+        full_height = len(obs_map)
+        full_width = len(obs_map[0])
+        tile_size = self.tile_size
+        lvl_img = jnp.zeros(
+            (full_height*tile_size, full_width*tile_size, 4), dtype=jnp.uint8)
+        lvl_img = lvl_img.at[:].set((0, 0, 0, 255))
+
+        # Map tiles
+        for y in range(len(obs_map)):
+            for x in range(len(obs_map[y])):
+                tile_img = self.prob.graphics[obs_map[y, x]]
+                lvl_img = lvl_img.at[y*tile_size: (y+1)*tile_size,
+                                    x*tile_size: (x+1)*tile_size, :].set(tile_img)
+        return lvl_img
 
     @property
     def default_params(self) -> PCGRLEnvParams:
@@ -534,6 +579,7 @@ def flatten_obs(obs: PCGRLObs) -> chex.Array:
 @partial(jax.jit, static_argnums=(0,))
 def render_map(env: PCGRLEnv, env_state: PCGRLEnvState,
                path_coords_tpl: chex.Array):
+    assert hasattr(env.prob, 'graphics'), "Have you forgotten to call `env.init_graphics()`?"
     tile_size = env.prob.tile_size
     env_map = env_state.env_map
     border_size = np.array((1, 1))

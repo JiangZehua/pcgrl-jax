@@ -14,7 +14,8 @@ import optax
 from flax.training.train_state import TrainState
 from flax.training import orbax_utils
 import orbax.checkpoint as ocp
-from tensorboardX import SummaryWriter
+
+import wandb
 
 from conf.config import Config, TrainConfig
 from envs.pcgrl_env import (gen_dummy_queued_state, gen_dummy_queued_state_old,
@@ -45,46 +46,71 @@ class Transition(NamedTuple):
     # rng_act: jnp.ndarray
 
 
-def log_callback(metric, steps_prev_complete, config: Config, writer, train_start_time):
-    timesteps = metric["timestep"][metric["returned_episode"]] * config.n_envs * config.num_steps
+def log_callback(metric, i, steps_prev_complete, config: Config, train_start_time):
+    timesteps = metric["timestep"][metric["returned_episode"]] * config.n_envs
     return_values = metric["returned_episode_returns"][metric["returned_episode"]]
 
-    # for t in range(len(timesteps)):
-    #     print(
-    #         f"global step={timesteps[t]}, episodic return={return_values[t]}")
-
     if len(timesteps) > 0:
-        t = timesteps[-1].item()
+        env_step = timesteps[-1].item()
+        # env_step = i * config.num_steps * config.n_envs
+        # env_step = int(metric["update_steps"] * config.num_steps * config.n_envs)
         ep_return_mean = return_values.mean()
         ep_return_max = return_values.max()
         ep_return_min = return_values.min()
-        print(f"global step={t}; episodic return mean: {ep_return_mean} " + \
-            f"max: {ep_return_max}, min: {ep_return_min}")
+        fps = (env_step - steps_prev_complete) / (timer() - train_start_time)
         ep_length = (metric["returned_episode_lengths"]
                         [metric["returned_episode"]].mean())
+
+        # This if block is just for backward compat when reloading runs from before when this was implemented.
+        if 'prob_stats' in metric:
+            prob_stats = metric['prob_stats']
+            prob_stats_mean_dict = {}
+            for k, v in prob_stats.items():
+                v = v[metric["returned_episode"]]
+                prob_stats_mean_dict[k] = v.mean().item()
+            prob_stats_str = ", ".join([f"{k}: {v:,.2f}" for k, v in prob_stats_mean_dict.items()])
+        else:
+            prob_stats_mean_dict = {}
+            prob_stats_str = ""
+
+        jax.debug.print(
+            ("global step={env_step:,}; episodic return mean: {ep_return_mean:,.2f} "
+            "max: {ep_return_max:,.2f}, "
+            "min: {ep_return_min:,.2f}, "
+            "ep. length: {ep_length:,.2f}, "
+            "fps: {fps:,.2f}, "
+            "{prob_stats_str},"
+            ), 
+            env_step=env_step,
+            ep_return_mean=ep_return_mean,
+            ep_return_max=ep_return_max,
+            ep_return_min=ep_return_min,
+            ep_length=ep_length,
+            fps=fps,
+            prob_stats_str=prob_stats_str)
 
         # Add a row to csv with ep_return
         with open(os.path.join(get_exp_dir(config),
                                 "progress.csv"), "a") as f:
-            f.write(f"{t},{ep_return_mean}\n")
+            f.write(f"{env_step},{ep_return_mean}\n")
 
-        writer.add_scalar("ep_return", ep_return_mean, t)
-        writer.add_scalar("ep_return_max", ep_return_max, t)
-        writer.add_scalar("ep_return_min", ep_return_min, t)
-        writer.add_scalar("ep_length", ep_length, t)
-        fps = (t - steps_prev_complete) / (timer() - train_start_time)
-        writer.add_scalar("fps", fps, t)
+        wandb.log({
+            "ep_return": ep_return_mean,
+            "ep_return_max": ep_return_max,
+            "ep_return_min": ep_return_min,
+            "ep_length": ep_length,
+            "fps": fps,
+            "global_step": env_step,
+            **prob_stats_mean_dict
+        }, step=env_step)
 
-        print(f"fps: {fps}")
-        # for k, v in zip(env.prob.metric_names, env.prob.stats):
-        #     writer.add_scalar(k, v, t)
 
 
 def make_train(config: TrainConfig, restored_ckpt, checkpoint_manager):
-    config.NUM_UPDATES = (
+    config._num_updates = (
         config.total_timesteps // config.num_steps // config.n_envs
     )
-    config.MINIBATCH_SIZE = (
+    config._minibatch_size = (
         config.n_envs * config.num_steps // config.NUM_MINIBATCHES
     )
     env_r, env_params = gymnax_pcgrl_make(config.env_name, config=config)
@@ -96,7 +122,7 @@ def make_train(config: TrainConfig, restored_ckpt, checkpoint_manager):
         frac = (
             1.0
             - (count // (config.NUM_MINIBATCHES * config.update_epochs))
-            / config.NUM_UPDATES
+            / config._num_updates
         )
         return config["LR"] * frac
 
@@ -104,8 +130,7 @@ def make_train(config: TrainConfig, restored_ckpt, checkpoint_manager):
 
         train_start_time = timer()
 
-        # Create a tensorboard writer
-        writer = SummaryWriter(get_exp_dir(config))
+    # Initialize wandb logging (handled in main)
 
         # INIT NETWORK
         network = init_network(env, env_params, config)
@@ -178,45 +203,20 @@ def make_train(config: TrainConfig, restored_ckpt, checkpoint_manager):
             steps_prev_complete = restored_ckpt['steps_prev_complete']
             runner_state = restored_ckpt['runner_state']
             steps_remaining = config.total_timesteps - steps_prev_complete
-            config.NUM_UPDATES = int(
+            config._num_updates = int(
                 steps_remaining // config.num_steps // config.n_envs)
 
             # TODO: Overwrite certain config values
 
-        _log_callback = partial(log_callback, config=config, writer=writer,
-                               train_start_time=train_start_time,
-                               steps_prev_complete=steps_prev_complete)
+        def _log_callback(metric, i):
+            log_callback(metric, i, steps_prev_complete, config, train_start_time)
 
-        # FIXME: Temporary hack for reloading binary after change to 
-        #   agent_coords generation.
-        if config.representation == 'narrow':
-            runner_state = runner_state.replace(
-                env_state=runner_state.env_state.replace(
-                    env_state=runner_state.env_state.env_state.replace(
-                        rep_state=runner_state.env_state.env_state.rep_state.replace(
-                            agent_coords=runner_state.env_state.env_state.rep_state.agent_coords[:, :config.map_width**2]
-                        )
-                    )
-                )
-            )
 
-        def render_frames(frames, i, metric):
-            timesteps = metric["timestep"][metric["returned_episode"]
-                                    ] * config.n_envs
-            if len(timesteps) > 0:
-                t = timesteps[0]
-            else:
-                t = 0
-            if config.render_freq <= 0 or i % config.render_freq != 0 or t == steps_prev_complete:
-            # if jnp.all(frames == 0):
-                return
-            print(f"Rendering episode gifs at update {i}")
+        def render_frames(frames, i):
+            env_step = int(i * config.num_steps * config.n_envs)
+            jax.debug.print("Rendering episode gifs at update {i}, in {exp_dir}", i=i, exp_dir=config.exp_dir)
             assert len(frames) == config.n_render_eps * 1 * env.max_steps,\
                 "Not enough frames collected"
-
-            if config.env_name == 'Candy':
-                # Render intermediary frames.
-                pass
 
             # Save gifs.
             for ep_is in range(config.n_render_eps):
@@ -234,10 +234,12 @@ def make_train(config: TrainConfig, restored_ckpt, checkpoint_manager):
                     imageio.v3.imwrite(
                         gif_name,
                         ep_frames,
-                        duration=config.gif_frame_duration
+                        duration=config.gif_frame_duration,
+                        loop=0,
                     )
+                    wandb.log({"video": wandb.Video(gif_name, format="gif")}, step=env_step)
                 except jax.errors.TracerArrayConversionError:
-                    print("Failed to save gif. Skipping...")
+                    jax.debug.print("Failed to save gif. Skipping...")
                     return
             print(f"Done rendering episode gifs at update {i}")
 
@@ -282,7 +284,7 @@ def make_train(config: TrainConfig, restored_ckpt, checkpoint_manager):
                 latest_ckpt_step = checkpoint_manager.latest_step()
                 if (latest_ckpt_step is None or
                         t - latest_ckpt_step >= config.ckpt_freq):
-                    print(f"Saving checkpoint at step {t}")
+                    print(f"Saving checkpoint at step {t:,.2f}")
                     ckpt = {'runner_state': runner_state,
                             # 'config': OmegaConf.to_container(config),
                             'step_i': t}
@@ -432,7 +434,7 @@ def make_train(config: TrainConfig, restored_ckpt, checkpoint_manager):
                 train_state, traj_batch, advantages, targets, rng = \
                     update_state
                 rng, _rng = jax.random.split(rng)
-                batch_size = config.MINIBATCH_SIZE * config.NUM_MINIBATCHES
+                batch_size = config._minibatch_size * config.NUM_MINIBATCHES
                 assert (
                     batch_size == config.num_steps * config.n_envs
                 ), "batch size must be equal to number of steps * number " + \
@@ -477,7 +479,7 @@ def make_train(config: TrainConfig, restored_ckpt, checkpoint_manager):
             # FIXME: Inside vmap, both conditions are likely to get executed. Any way around this?
             # Currently not vmapping the train loop though, so it's ok.
             # start_time = timer()
-            should_render = runner_state.update_i % config.render_freq == 0
+            should_render = (runner_state.update_i % config.render_freq) == 0
             frames, states = jax.lax.cond(
                 should_render,
                 lambda: render_episodes(train_state.params),
@@ -485,12 +487,12 @@ def make_train(config: TrainConfig, restored_ckpt, checkpoint_manager):
             jax.lax.cond(
                 should_render,
                 partial(jax.debug.callback, render_frames),
-                lambda _, __, ___: None,
-                frames, runner_state.update_i, metric
+                lambda _, __: None,
+                frames, runner_state.update_i
             )
             # jax.debug.print(f'Rendering episode gifs took {timer() - start_time} seconds')
 
-            jax.debug.callback(_log_callback, metric)
+            jax.debug.callback(_log_callback, metric, runner_state.update_i)
 
             runner_state = RunnerState(
                 train_state, env_state, last_obs, rng,
@@ -499,16 +501,18 @@ def make_train(config: TrainConfig, restored_ckpt, checkpoint_manager):
             return runner_state, metric
 
         runner_state, metric = jax.lax.scan(
-            _update_step, runner_state, None, config.NUM_UPDATES
+            _update_step, runner_state, None, config._num_updates
         )
 
         # One final logging/checkpointing call to ensure things finish off
         # neatly.
-        jax.debug.callback(_log_callback, metric)
+        jax.debug.callback(_log_callback, metric, runner_state.update_i)
         jax.debug.callback(save_checkpoint, runner_state, metric,
                            steps_prev_complete)
 
         return {"runner_state": runner_state, "metrics": metric}
+
+
 
     return lambda rng: train(rng, config)
 
@@ -625,6 +629,7 @@ def init_checkpointer(config: Config) -> Tuple[Any, dict]:
 
         return restored_ckpt
 
+    wandb_run_id = None
     if checkpoint_manager.latest_step() is None:
         restored_ckpt = None
     else:
@@ -639,6 +644,8 @@ def init_checkpointer(config: Config) -> Tuple[Any, dict]:
         for steps_prev_complete in ckpt_steps:
             try:
                 restored_ckpt = try_load_ckpt(steps_prev_complete, target)
+                with open(os.path.join(config.exp_dir, "wandb_run_id.txt"), "r") as f:
+                    wandb_run_id = f.read().strip()
                 if restored_ckpt is None:
                     raise TypeError("Restored checkpoint is None")
                 break
@@ -646,26 +653,13 @@ def init_checkpointer(config: Config) -> Tuple[Any, dict]:
                 print(f"Failed to load checkpoint at step {steps_prev_complete}. Error: {e}")
                 continue 
     
-    return checkpoint_manager, restored_ckpt
+    return checkpoint_manager, restored_ckpt, wandb_run_id
 
     
-def main_chunk(config, rng, exp_dir):
+def main_chunk(config, rng, restored_ckpt=None, checkpoint_manager=None):
     """When jax jits the training loop, it pre-allocates an array with size equal to number of training steps. So, when training for a very long time, we sometimes need to break training up into multiple
     chunks to save on VRAM.
     """
-    checkpoint_manager, restored_ckpt = init_checkpointer(config)
-
-    # if restored_ckpt is not None:
-    #     ep_returns = restored_ckpt['runner_state'].ep_returns
-    #     plot_ep_returns(ep_returns, config)
-    # else:
-    if restored_ckpt is None:
-        progress_csv_path = os.path.join(exp_dir, "progress.csv")
-        assert not os.path.exists(progress_csv_path), "Progress csv already exists, but have no checkpoint to restore " +\
-            "from. Run with `overwrite=True` to delete the progress csv."
-        # Create csv for logging progress
-        with open(os.path.join(exp_dir, "progress.csv"), "w") as f:
-            f.write("timestep,ep_return\n")
 
     train_jit = jax.jit(make_train(config, restored_ckpt, checkpoint_manager))
     out = train_jit(rng)
@@ -683,22 +677,64 @@ def main(config: TrainConfig):
     rng = jax.random.PRNGKey(config.seed)
 
     exp_dir = config.exp_dir
-    print(f'running experiment at {exp_dir}\n')
-
+    print(f'Running experiment to be logged at {exp_dir}\n')
 
     # Need to do this before setting up checkpoint manager so that it doesn't refer to old checkpoints.
     if config.overwrite and os.path.exists(exp_dir):
         shutil.rmtree(exp_dir)
 
+    checkpoint_manager, restored_ckpt, wandb_run_id = init_checkpointer(config)
+    if restored_ckpt is not None:
+        steps_prev_complete = restored_ckpt['steps_prev_complete']
+    else:
+        steps_prev_complete = 0
+
+    os.makedirs(exp_dir, exist_ok=True)
+
+    # Initialize wandb run
+    run = wandb.init(
+        project=getattr(config, "wandb_project", "pcgrl-jax"),
+        config=OmegaConf.to_container(config),
+        mode=getattr(config, "wandb_mode", "online"),
+        dir=exp_dir,
+        id=wandb_run_id,
+        resume=None,
+    )
+    wandb_run_id = run.id
+    with open(os.path.join(exp_dir, "wandb_run_id.txt"), "w") as f:
+        f.write(wandb_run_id)
+
+    # if restored_ckpt is not None:
+    #     ep_returns = restored_ckpt['runner_state'].ep_returns
+    #     plot_ep_returns(ep_returns, config)
+    # else:
+    if restored_ckpt is None:
+        progress_csv_path = os.path.join(exp_dir, "progress.csv")
+        if os.path.exists(progress_csv_path):
+            print("Progress csv already exists, but have no checkpoint to restore " +\
+                "from. Overwriting it.")
+        # Create csv for logging progress
+        with open(os.path.join(exp_dir, "progress.csv"), "w") as f:
+            f.write("timestep,ep_return\n")
+
     if config.timestep_chunk_size != -1:
         n_chunks = config.total_timesteps // config.timestep_chunk_size
-        for i in range(n_chunks):
+        n_chunks_complete = steps_prev_complete // config.timestep_chunk_size
+        for i in range(n_chunks_complete, n_chunks):
+            if i > 0:
+                # In case we called the overall function with `overwrite=True`, we need to make sure we don't mess things up moving forward.
+                # (In particular, not doing this will cause the step index to go back to 0 at the beginning of each new chunk... and overwrite the checkpoints?)
+                # (Ultimately we should make this chunk function less lazy in its approach. Move more initialization outside of it. But for now, anyway.)
+                config.overwrite = False
             config.total_timesteps = config.timestep_chunk_size + (i * config.timestep_chunk_size)
             print(f"Running chunk {i+1}/{n_chunks}")
-            out = main_chunk(config, rng, exp_dir)
-
+            out = main_chunk(config, rng, restored_ckpt, checkpoint_manager)
+            runer_state = out["runner_state"]
+            steps_prev_complete = (i + 1) * config.timestep_chunk_size
+            # A bit of a hack
+            restored_ckpt = {'runner_state': runer_state, 'steps_prev_complete': steps_prev_complete}
     else:
-        out = main_chunk(config, rng, exp_dir)        
+        out = main_chunk(config, rng, restored_ckpt, checkpoint_manager)
 
 #   ep_returns = out["runner_state"].ep_returns
 

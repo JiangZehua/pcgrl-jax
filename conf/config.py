@@ -11,12 +11,14 @@ from dataclasses import dataclass
 
 @dataclass
 class Config:
+    sweep_name: Optional[str] = None
+    save_dir: str = "saves"
     lr: float = 1.0e-4
     n_envs: int = 400
     # How many steps do I take in all of my batched environments before doing a gradient update
     num_steps: int = 128
     total_timesteps: int = int(5e7)
-    timestep_chunk_size: int = -1
+    timestep_chunk_size: int = int(5e7)
     update_epochs: int = 10
     NUM_MINIBATCHES: int = 4
     GAMMA: float = 0.99
@@ -34,6 +36,7 @@ class Config:
 
     problem: str = "binary"
     representation: str = "narrow"
+    rand_narrow_coords: bool = False
     model: str = "conv"
 
     map_width: int = 16
@@ -42,6 +45,7 @@ class Config:
     # ctrl_metrics: Tuple[str] = ('diameter', 'n_regions')
     ctrl_metrics: Tuple[str] = ()
     # Size of the receptive field to be fed to the action subnetwork.
+    obs_size: int = -1
     vrf_size: Optional[int] = -1  # -1 means 2 * map_width - 1, i.e. full observation, 31 if map_width=16
     # Size of the receptive field to be fed to the value subnetwork.
     arf_size: Optional[int] = -1  # -1 means 2 * map_width - 1, i.e. full observation, 31 if map_width=16
@@ -54,7 +58,7 @@ class Config:
 
     static_tile_prob: Optional[float] = 0.0
     n_freezies: int = 0
-    n_agents: int = 1  # multi-agent is fake and broken
+    n_agents: int = 1
     multiagent: bool = False
     max_board_scans: float = 3.0
 
@@ -70,10 +74,7 @@ class Config:
     # each episode.
     pinpoints: bool = False
 
-    hidden_dims: Tuple[int] = (64, 256)
-
-    # TODO: Implement this. Just a placeholder for now.
-    reward_every: int = 1
+    hidden_dims: Tuple[int] = (256, 512)
 
     # A toggle, will add `n_envs` to the experiment name if we are profiling training FPS, so that we can distinguish 
     # results.
@@ -90,6 +91,7 @@ class Config:
 
 @dataclass
 class EvoMapConfig(Config):
+    save_dir: str = "saves_evo_map"
     n_generations: int = 100_000
     evo_pop_size: int = 100
     n_parents: int = 50
@@ -106,18 +108,26 @@ class TrainConfig(Config):
     # Save a checkpoint after (at least) this many timesteps
     ckpt_freq: int = int(1e7)
     # Render after this many update steps
-    render_freq: int = 1000
+    render_freq: int = 50
     n_render_eps: int = 3
 
     # eval the model on pre-made eval freezie maps to see how it's doing
+    n_eval_envs: int = 10
     eval_freq: int = 100
     n_eval_maps: int = 6
     eval_map_path: str = "user_defined_freezies/binary_eval_maps.json"
     # discount factor for regret value calculation is the same as GAMMA
 
+    # WandB Params
+    wandb_mode: str = 'run'  # one of: 'offline', 'run', 'dryrun', 'shared', 'disabled', 'online'
+    wandb_entity: str = ''
+    wandb_project: str = 'smearle_pcgrl_mappo'
+
+
     # NOTE: DO NOT MODIFY THESE. WILL BE SET AUTOMATICALLY AT RUNTIME. ########
-    NUM_UPDATES: Optional[int] = None
-    MINIBATCH_SIZE: Optional[int] = None
+    obs_size_hid_dims: int = -1
+    _num_updates: int = -1
+    _minibatch_size: int = -1
     ###########################################################################
 
 
@@ -138,20 +148,15 @@ class MultiAgentConfig(TrainConfig):
     model: str = 'rnn'
     representation: str = "turtle"
     n_agents: int = 2
-    n_envs: int = 4
-    n_eval_envs: int = 10
+    n_envs: int = 400
     scale_clip_eps: bool = False
-    hidden_dims: Tuple[int] = (512, -1)
+    # hidden_dims: Tuple[int] = (512, 256)
     a_freezer: bool = False
+    per_agent_reward_freq: int = -1
 
     # Save a checkpoint after (at least) this many ***update*** steps
     ckpt_freq: int = 40
     render_freq: int = 20
-
-    # WandB Params
-    WANDB_MODE: str = 'run'  # one of: 'offline', 'run', 'dryrun', 'shared', 'disabled', 'online'
-    ENTITY: str = ''
-    PROJECT: str = 'smearle_pcgrl_mappo'
 
     # NOTE: DO NOT MODIFY THESE. WILL BE SET AUTOMATICALLY AT RUNTIME. ########
     _num_actors: int = -1
@@ -177,7 +182,7 @@ class EvalConfig(TrainConfig):
     random_agent: bool = False
     # In how many bins to divide up each metric being evaluated
     n_bins: int = 10
-    n_eps: int = 5
+    n_eps: int = 1
     eval_map_width: Optional[int] = None
     eval_max_board_scans: Optional[float] = None
     eval_randomize_map_shape: Optional[bool] = None
@@ -190,13 +195,12 @@ class EvalConfig(TrainConfig):
     #     'mean_ep_reward',
     # ]
 
-    # metrics_to_keep: Tuple[str] = ('mean_ep_reward',)
-    metrics_to_keep: Tuple[str] = ('mean_fps',)
+    metrics_to_keep: Tuple[str] = ('mean_ep_reward',)
+    # metrics_to_keep: Tuple[str] = ('mean_fps',)
 
 
 @dataclass
-class MultiAgentEvalConfig(EvalConfig, MultiAgentConfig):
-    multiagent = True
+class EvalMultiAgentConfig(MultiAgentConfig, EvalConfig):
     pass
 
 
@@ -206,10 +210,12 @@ class EnjoyConfig(EvalConfig):
     # How many episodes to render as gifs
     n_eps: int = 5
     eval_map_width: Optional[int] = None
-    render_stats: bool = True
+    # Add debugging text showing the current/target values for various stats to each frame of the episode (this is really slow)
+    render_stats: bool = False
     n_enjoy_envs: int = 1
     render_ims: bool = False
     a_freezer: bool = False
+    render_obs: bool = False
 
 
 @dataclass
@@ -229,6 +235,7 @@ class SweepConfig(EnjoyConfig, EvalConfig):
     mode: str = 'train'
     slurm: bool = True
     overwrite: bool = False
+    n_eval_envs: int = 50
 
 @dataclass
 class GetTracesConfig(EnjoyConfig):
@@ -237,17 +244,18 @@ class GetTracesConfig(EnjoyConfig):
     n_eps: int = 1  # keep it at 1 for each trace
     render_stats: bool = False
     render_ims: bool = False
+    overwrite_traces: bool = False
 
 cs = ConfigStore.instance()
 cs.store(name="config", node=Config)
 cs.store(name="ma_config", node=MultiAgentConfig)
 cs.store(name="enjoy_ma_pcgrl", node=EnjoyMultiAgentConfig)
-cs.store(name="get_traces_pcgrl", node=GetTracesConfig)
 cs.store(name="evo_map_pcgrl", node=EvoMapConfig)
 cs.store(name="train_pcgrl", node=TrainConfig)
 cs.store(name="train_accel_pcgrl", node=TrainAccelConfig)
 cs.store(name="enjoy_pcgrl", node=EnjoyConfig)
 cs.store(name="eval_pcgrl", node=EvalConfig)
-cs.store(name="eval_ma_pcgrl", node=MultiAgentEvalConfig)
+cs.store(name="eval_ma_pcgrl", node=EvalMultiAgentConfig)
 cs.store(name="profile_pcgrl", node=ProfileEnvConfig)
 cs.store(name="batch_pcgrl", node=SweepConfig)
+cs.store(name="get_traces_pcgrl", node=GetTracesConfig)

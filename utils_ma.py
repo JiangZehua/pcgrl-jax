@@ -32,7 +32,7 @@ from marl.model import ActorCategorical, ActorCriticPCGRL, ActorMLP, ActorRNN, C
 from conf.config import Config, MultiAgentConfig
 from envs.pcgrl_env import PCGRLEnv, PCGRLEnvParams, PCGRLEnvState, PCGRLObs
 from marl.wrappers.baselines import MALogWrapper, MultiAgentWrapper
-from utils import get_env_params_from_config, get_exp_dir, init_config
+from utils import get_env_params_from_config_ma, get_exp_dir, init_config
 
 
 @struct.dataclass
@@ -76,7 +76,7 @@ def linear_schedule(config, count):
 
 def init_run(config: MultiAgentConfig, ckpt_manager, latest_update_step, rng):
     # Create PCGRL environment
-    env_params = get_env_params_from_config(config)
+    env_params = get_env_params_from_config_ma(config)
     env = PCGRLEnv(env_params)
 
     # Wrap environment with JAXMARL wrapper
@@ -309,7 +309,7 @@ def make_sim_render_episode(config: MultiAgentConfig, actor_network, env: PCGRLE
 def render_callback(env: PCGRLEnv, frames, save_dir: str, t: int, max_steps: int):
 
     imageio.mimsave(os.path.join(save_dir, f"enjoy_{t}.gif"), np.array(frames), fps=20, loop=0)
-    wandb.log({"video": wandb.Video(os.path.join(save_dir, f"enjoy_{t}.gif"), fps=20, format="gif")})
+    wandb.log({"video": wandb.Video(os.path.join(save_dir, f"enjoy_{t}.gif"), format="gif")})
 
 
 def get_ckpt_dir(config: MultiAgentConfig):
@@ -319,6 +319,7 @@ def get_ckpt_dir(config: MultiAgentConfig):
     
 def ma_init_config(config: MultiAgentConfig):
     config._num_eval_actors = config.n_eval_envs * config.n_agents
+    config._num_actors = config.n_agents * config.n_envs
     init_config(config)
     config._exp_dir = get_exp_dir(config)
     config._ckpt_dir = get_ckpt_dir(config)

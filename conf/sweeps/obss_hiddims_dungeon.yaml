@@ -1,0 +1,35 @@
+NAME: obss_hiddims_dungeon
+change_pct:
+- -1.0
+eval_hypers:
+  eval_map_width:
+  - 8
+  - 16
+  - 24
+  - 32
+  eval_randomize_map_shape:
+  - true
+  - false
+max_board_scans:
+- 5
+model:
+- conv2
+n_envs:
+- 600
+obs_size_hid_dims:
+- 5
+- 8
+- 16
+- -1
+problem:
+- dungeon
+seed:
+- 0
+- 1
+- 2
+- 3
+- 4
+total_timesteps:
+- 1000000000
+wandb_project:
+- reasonPCG

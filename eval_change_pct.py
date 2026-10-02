@@ -36,13 +36,13 @@ class EvalData:
     # cell_rewards: chex.Array
     cell_rewards: chex.Array
 
-@hydra.main(version_base=None, config_path='./', config_name='eval_pcgrl')
+@hydra.main(version_base="1.3", config_path='./', config_name='eval_pcgrl')
 def main_eval_cp(config: EvalConfig):
     config = init_config(config)
 
     exp_dir = config.exp_dir
     if not config.random_agent:
-        checkpoint_manager, restored_ckpt = init_checkpointer(config)
+        checkpoint_manager, restored_ckpt, wandb_run_id = init_checkpointer(config)
         network_params = restored_ckpt['runner_state'].train_state.params
     elif not os.path.exists(exp_dir):
         os.makedirs(exp_dir)

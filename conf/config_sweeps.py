@@ -206,6 +206,155 @@
 # ]
 
 
+hypers = [
+    {
+        'NAME': 'LeveLM_basic',
+        'problem': ['binary', 'dungeon'],
+        'representation': ['turtle', 'narrow'],
+        'obs_size_hid_dims': [3, 5, 8],
+        'model': ['conv2'],
+        'change_pct': [-1.0],
+        'seed': list(range(5)),
+        'map_width': [15],
+        'n_envs': [600],
+        'max_board_scans': [5],
+        'total_timesteps': [1_000_000_000],
+        'wandb_project': ['reasonPCG'],
+    },
+]
+
+# hypers = [
+#     {
+#         'NAME': 'obs_binary',
+#         'problem': ['binary'],
+#         'representation': ['turtle'],
+#         'obs_size': [8, 16, -1],
+#         'model': ['conv2'],
+#         'change_pct': [-1.0],
+#         'seed': list(range(5)),
+#         'n_envs': [600],
+#         'max_board_scans': [5],
+#         'total_timesteps': [1_000_000_000],
+#         'wandb_project': ['reasonPCG'],
+#     },
+# ]
+
+# hypers = [
+#     {
+#         'NAME': 'obs_binary',
+#         'problem': ['binary'],
+#         'representation': ['turtle'],
+#         'obs_size': [3, 8, 16, -1],
+#         'model': ['conv2'],
+#         'change_pct': [-1.0],
+#         'seed': list(range(5)),
+#         'n_envs': [600],
+#         'max_board_scans': [3],
+#         'total_timesteps': [1_000_000_000],
+#         'wandb_project': ['reasonPCG'],
+#     },
+# ]
+
+# hypers = [
+#     {
+#         'NAME': 'binary_wide_rewardfreq',
+#         'problem': ['binary'],
+#         'representation': ['wide'],
+#         'model': ['nca'],
+#         'change_pct': [-1.0],
+#         'seed': list(range(5)),
+#         'n_envs': [200],
+#         'reward_freq': [1, 5, 10],
+#         'max_board_scans': [3],
+#         'total_timesteps': [1_000_000_000],
+#         'wandb_project': ['reasonPCG'],
+#         'timestep_chunk_size': [int(1e7)],
+#     },
+# ]
+
+# hypers = [
+#     {
+#         'NAME': 'obs_dungeon',
+#         'problem': ['dungeon'],
+#         'representation': ['turtle'],
+#         'obs_size': [3, 8, 16, -1],
+#         'model': ['conv2'],
+#         'change_pct': [-1.0],
+#         'seed': list(range(5)),
+#         'n_envs': [600],
+#         'max_board_scans': [3],
+#         'total_timesteps': [1_000_000_000],
+#         'wandb_project': ['reasonPCG_dungeon'],
+#     },
+# ]
+
+# hypers = [
+#     {
+#         'NAME': 'obs_dungeon_narrow',
+#         'problem': ['dungeon'],
+#         'representation': ['narrow'],
+#         'obs_size': [3, 8, 16, -1],
+#         'model': ['conv2'],
+#         'change_pct': [-1.0],
+#         'seed': list(range(5)),
+#         'n_envs': [600],
+#         'max_board_scans': [3],
+#         'total_timesteps': [1_000_000_000],
+#         'wandb_project': ['reasonPCG_dungeon'],
+#     },
+# ]
+
+# hypers = [
+#     {
+#         'NAME': 'dungeon_wide_rewardfreq',
+#         'problem': ['dungeon'],
+#         'representation': ['wide'],
+#         'model': ['nca'],
+#         'change_pct': [-1.0],
+#         'seed': list(range(5)),
+#         'n_envs': [200],
+#         'reward_freq': [1, 5, 10],
+#         'max_board_scans': [3],
+#         'total_timesteps': [1_000_000_000],
+#         'wandb_project': ['reasonPCG_dungeon'],
+#         'timestep_chunk_size': [int(1e7)],
+#     },
+# ]
+
+# hypers = [
+#     {
+#         'NAME': 'obss_hiddims_dungeon',
+#         'problem': ['dungeon'],
+#         'representation': ['turtle'],
+#         'obs_size_hid_dims': [5, 8, 16, -1],
+#         'model': ['conv2'],
+#         'change_pct': [-1.0],
+#         'seed': list(range(5)),
+#         'n_envs': [600],
+#         'max_board_scans': [5],
+#         'total_timesteps': [1_000_000_000],
+#         'wandb_project': ['reasonPCG'],
+#     },
+# ]
+
+
+# hypers = [
+#     {
+#         'NAME': 'obss_hiddims_dungeon2',
+#         'problem': ['dungeon2'],
+#         # 'obs_size_hid_dims': [3, 5, 8, 16, -1],
+#         'obs_size_hid_dims': [3, 5, 8, 16],
+#         # 'obs_size_hid_dims': [-1],
+#         'model': ['conv2'],
+#         'change_pct': [-1.0],
+#         'seed': list(range(5)),
+#         'n_envs': [600],
+#         'max_board_scans': [5],
+#         'total_timesteps': [1_000_000_000],
+#     },
+# ]
+
+
 # hypers = [
 #     {
 #         'NAME': 'obss_hiddims_dungeon_conv2_ctrl_path',
@@ -731,6 +880,7 @@
 #     },
 # ]
 
+
 # hypers = [
 #     {
 #         'NAME': 'ma_board_scans_maze_obs_3',
@@ -797,6 +947,32 @@
 #         'ckpt_freq': [100],
 #         'render_freq': [100],
 #         'seed': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+#     },
+# ]
+
+# hypers = [
+#     {
+#         'NAME': 'ma_n_agents_dungeon_conv2_obs_3',
+#         'multiagent': True,
+
+#         'problem': ['dungeon'],
+#         'map_width': [16],
+#         'n_agents': [1, 2, 3],
+#         # 'n_agents': [3],
+#         'representation': ['turtle'],
+#         'model': ['conv2'],
+#         'obs_size_hid_dims': [3],
+#         # 'obs_size_hid_dims': [3, 5, 8],
+#         'max_board_scans': [1.0],
+#         # 'max_board_scans': [3.0],
+#         'randomize_map_shape': [False],
+#         # 'change_pct': [-1.0],
+#         'n_envs': [400],
+#         'empty_start': [False],
+#         'total_timesteps': [900_000_000],
+#         'ckpt_freq': [100],
+#         'render_freq': [100],
+#         'seed': [0, 1, 2, 3, 4],
 #     },
 # ]
 
@@ -1158,25 +1334,25 @@
 #     },
 # ]
 
-hypers = [
-    {
-        'NAME': 'for_some_reasoning_conv2',
-        'multiagent': False,
+# hypers = [
+#     {
+#         'NAME': 'for_some_reasoning_conv2',
+#         'multiagent': False,
 
-        'problem': ['binary', 'maze', 'dungeon'],
-        'map_width': [16],
-        'n_agents': [1],
-        'representation': ['narrow','turtle'],
-        'model': ['conv2'],
-        'max_board_scans': [1.0, 3.0],
-        'n_envs': [400],
-        'empty_start': [False, True],
-        'total_timesteps': [1_000_000_000],
-        'ckpt_freq': [100],
-        'render_freq': [100],
-        'seed': [0, 1, 2, 3, 4, 5],
-    },
-]
+#         'problem': ['binary', 'maze', 'dungeon'],
+#         'map_width': [16],
+#         'n_agents': [1],
+#         'representation': ['narrow','turtle'],
+#         'model': ['conv2'],
+#         'max_board_scans': [1.0, 3.0],
+#         'n_envs': [400],
+#         'empty_start': [False, True],
+#         'total_timesteps': [1_000_000_000],
+#         'ckpt_freq': [100],
+#         'render_freq': [100],
+#         'seed': [0, 1, 2, 3, 4, 5],
+#     },
+# ]
 
 # hypers = [
 #     {   
@@ -1196,11 +1372,230 @@ hypers = [
 # ]
 
 
+# hypers = [
+#     {
+#         'NAME': 'ma_n_agents_dungeon_conv2_obs_3',
+#         'multiagent': True,
+
+#         'problem': ['dungeon'],
+#         'map_width': [16],
+#         'n_agents': [1, 2, 3],
+#         # 'n_agents': [3],
+#         'representation': ['turtle'],
+#         'model': ['conv2'],
+#         'obs_size_hid_dims': [3, 5, 8],
+#         'max_board_scans': [1.0],
+#         # 'max_board_scans': [3.0],
+#         'randomize_map_shape': [False],
+#         # 'change_pct': [-1.0],
+#         'n_envs': [400],
+#         'empty_start': [False],
+#         'total_timesteps': [2_000_000_000],
+#         'ckpt_freq': [100],
+#         'render_freq': [100],
+#         'seed': [0, 1, 2, 3, 4],
+#     },
+# ]
+
+# hypers = [
+#     {
+#         'NAME': 'ma_board_scans_binary_aiide',
+#         'multiagent': True,
+# 
+#         'problem': ['binary'],
+#         'map_width': [16],
+#         'n_agents': [1,2,3],
+#         'representation': ['turtle'],
+#         'model': ['conv2'],
+#         'obs_size_hid_dims': [3, 31],
+#         'max_board_scans': [1.0],
+#         # 'max_board_scans': [3.0],
+#         'randomize_map_shape': [False],
+#         'n_envs': [400],
+#         'empty_start': [False],
+#         # 'pinpoints': [True, False],
+#         'total_timesteps': [900_000_000],
+#         'ckpt_freq': [100],
+#         'render_freq': [100],
+#         'seed': [0, 1, 2, 3, 4],
+#     },
+# ]
+
+# hypers = [
+    # {
+    #     'NAME': 'ma_n_agents',
+    #     'multiagent': True,
+    #     'problem': ['binary'],
+    #     'map_width': [16],
+    #     'n_agents': [1,2,3,5,10,20],
+    #     'representation': ['turtle'],
+    #     'model': ['conv2'],
+    #     'obs_size_hid_dims': [3],
+    #     'max_board_scans': [3.0],
+    #     # 'max_board_scans': [3.0],
+    #     'randomize_map_shape': [False],
+    #     'n_envs': [400],
+    #     'empty_start': [False],
+    #     # 'pinpoints': [True, False],
+    #     'total_timesteps': [1_500_000_000],
+    #     'ckpt_freq': [100],
+    #     'render_freq': [100],
+    #     'seed': list(range(0, 10)),
+    # },
+    # {
+    #     'NAME': 'ma_n_agents',
+    #     'multiagent': True,
+    #     'problem': ['binary'],
+    #     'map_width': [16],
+    #     'n_agents': [1,2,3],
+    #     'representation': ['turtle'],
+    #     'model': ['conv2'],
+    #     'obs_size_hid_dims': [3],
+    #     'max_board_scans': [1.0],
+    #     # 'max_board_scans': [3.0],
+    #     'randomize_map_shape': [False],
+    #     'n_envs': [400],
+    #     'empty_start': [False],
+    #     # 'pinpoints': [True, False],
+    #     'total_timesteps': [2_000_000_000],
+    #     'ckpt_freq': [500],
+    #     'render_freq': [-1],
+    #     # 'seed': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    #     'seed': list(range(15, 20)),
+    # },
+    # {
+    #     'NAME': 'ma_n_agents',
+    #     'multiagent': True,
+    #     'problem': ['binary'],
+    #     'map_width': [16],
+    #     'n_agents': [5, 10, 20],
+    #     'representation': ['turtle'],
+    #     'model': ['conv2'],
+    #     'obs_size_hid_dims': [3],
+    #     'max_board_scans': [1.0],
+    #     # 'max_board_scans': [3.0],
+    #     'randomize_map_shape': [False],
+    #     'n_envs': [400],
+    #     'empty_start': [False],
+    #     # 'pinpoints': [True, False],
+    #     'total_timesteps': [2_000_000_000],
+    #     'ckpt_freq': [500],
+    #     'render_freq': [-1],
+    #     # 'seed': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    #     'seed': list(range(10, 20)),
+    # },
+# ]
+
+# hypers = [
+#     {
+#         'NAME': 'ma_n_agents_empty',
+#         'multiagent': True,
+
+#         'problem': ['binary'],
+#         'map_width': [16],
+#         'n_agents': [1, 5, 10, 20],
+#         'representation': ['turtle'],
+#         'model': ['conv2'],
+#         'obs_size_hid_dims': [3],
+#         'max_board_scans': [3.0],
+#         'randomize_map_shape': [False],
+#         'n_envs': [400],
+#         'empty_start': [True],
+#         'total_timesteps': [1_000_000_000],
+#         'ckpt_freq': [100],
+#         'render_freq': [100],
+#         'seed': [0, 1, 2],
+#         # 'seed': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+#     },
+# ]
+
+# hypers = [
+#     {
+#         'NAME': 'ma_board_scans_n_agents',
+#         'multiagent': True,
+
+#         'problem': ['binary'],
+#         'map_width': [16],
+#         'n_agents': [1],
+#         'representation': ['turtle'],
+#         'model': ['conv2'],
+#         'obs_size_hid_dims': [3],
+#         'max_board_scans': [1.5, 3.0],
+#         'n_envs': [400],
+#         'empty_start': [False],
+#         'total_timesteps': [900_000_000],
+#         'ckpt_freq': [100],
+#         'render_freq': [100],
+#         'seed': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+#     },
+#     {
+#         'NAME': 'ma_board_scans_n_agents',
+#         'multiagent': True,
+
+#         'problem': ['binary'],
+#         'map_width': [16],
+#         'n_agents': [2],
+#         'representation': ['turtle'],
+#         'model': ['conv2'],
+#         'obs_size_hid_dims': [3],
+#         'max_board_scans': [0.75, 1.5],
+#         'n_envs': [400],
+#         'empty_start': [False],
+#         'total_timesteps': [900_000_000],
+#         'ckpt_freq': [100],
+#         'render_freq': [100],
+#         'seed': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+#     },
+#     {
+#         'NAME': 'ma_board_scans_n_agents',
+#         'multiagent': True,
+
+#         'problem': ['binary'],
+#         'map_width': [16],
+#         'n_agents': [3],
+#         'representation': ['turtle'],
+#         'model': ['conv2'],
+#         'obs_size_hid_dims': [3],
+#         'max_board_scans': [0.5, 1.0],
+#         'n_envs': [400],
+#         'empty_start': [False],
+#         'total_timesteps': [1_000_000_000],
+#         'ckpt_freq': [500],
+#         'render_freq': [-1],
+#         'seed': list(range(10, 20)),
+#     },
+# ]
+
+# hypers = [
+#     {
+#         'NAME': 'ma_agent_rew_freq',
+#         'multiagent': True,
+
+#         'problem': ['binary'],
+#         'map_width': [16],
+#         'n_agents': [20],
+#         'per_agent_reward_freq': [1, 5, 10, -1],
+#         'representation': ['turtle'],
+#         'model': ['conv2'],
+#         'obs_size_hid_dims': [3],
+#         'max_board_scans': [3.0],
+#         # 'max_board_scans': [3.0],
+#         'randomize_map_shape': [False],
+#         'n_envs': [400],
+#         'empty_start': [False],
+#         # 'pinpoints': [True, False],
+#         'total_timesteps': [500_000_000],
+#         'ckpt_freq': [100],
+#         'render_freq': [100],
+#         'seed': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+#     },
+# ]
+
 eval_hypers = {
-    # 'eval_randomize_map_shape': [True, False],
-    'eval_randomize_map_shape': [False],
-    # 'eval_map_width': [8, 16, 24, 32],
-    'eval_map_width': [16],
+    # 'eval_randomize_map_shape': [False],
+    # 'eval_map_width': [16],
+    'eval_randomize_map_shape': [True, False],
+    'eval_map_width': [8, 16, 24, 32],
     # 'eval_max_board_scans': [10],
 }
 

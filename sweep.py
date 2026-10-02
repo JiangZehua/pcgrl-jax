@@ -4,12 +4,13 @@ import json
 import os
 import pprint
 
+from dotenv import load_dotenv
 import hydra
 from omegaconf import OmegaConf
 import submitit
 from tqdm import tqdm
 
-from conf.config import EnjoyConfig, EvalConfig, GetTracesConfig, MultiAgentConfig, MultiAgentEvalConfig, EnjoyMultiAgentConfig, SweepConfig, TrainConfig
+from conf.config import EnjoyConfig, EvalConfig, GetTracesConfig, MultiAgentConfig, EvalMultiAgentConfig, EnjoyMultiAgentConfig, SweepConfig, TrainConfig
 from conf.config_sweeps import eval_hypers
 from utils import get_sweep_conf_path, load_sweep_hypers, write_sweep_confs
 from enjoy import main_enjoy
@@ -54,24 +55,29 @@ def get_grid_cfgs(base_config, hypers, mode, eval_hypers={}):
     """Return set of experiment configs corresponding to the grid of 
     hyperparameter values specified by kwargs."""
 
+    hypers2 = copy.deepcopy(hypers)
+
     # If models were trained with different max_board_scans, evaluate them on the highest such value, for fairness.
     if 'eval' in mode or 'enjoy' in mode or 'get_traces' in mode:
         # if 'max_board_scans' in hypers.keys() and 'max_board_scans' not in eval_hypers:
         #     base_config.eval_max_board_scans = max(hypers['max_board_scans'])
 
         # Add eval hypers
-        hypers = {**hypers, **eval_hypers}
+        hypers2 = {**hypers2, **eval_hypers}
 
     # Because this may depend on a bunch of other hyperparameters, so we need to compute hiddims last.
     has_obs_size_hid_dims = False
-    if 'obs_size_hid_dims' in hypers:
+    if 'obs_size_hid_dims' in hypers2:
         has_obs_size_hid_dims = True
-        obs_size_hid_dims = hypers.pop('obs_size_hid_dims')
-    items = sorted(list(hypers.items()))
+        obs_size_hid_dims = hypers2.pop('obs_size_hid_dims')
+    items = sorted(list(hypers2.items()))
     if has_obs_size_hid_dims:
         items.append(('obs_size_hid_dims', obs_size_hid_dims))
 
-    subconfigs = [base_config]
+    subconfigs = [copy.deepcopy(base_config)]
+
+    [setattr(sc, 'sweep_name', hypers.get('NAME', 'default_sweep')) for sc in subconfigs]
+
     # Name of hyper, list of values
     hid_dims_dicts = {}
     for k, v in items:
@@ -121,7 +127,6 @@ def get_grid_cfgs(base_config, hypers, mode, eval_hypers={}):
                         hidden_dims = hid_dims_dict[obs_size_d]
                     except:
                         print(f"obs_size {obs_size} not found in hid_dims_dict, try launching gen_hid_params_per_model_obs_size.py with corect problem, representation and model.")
-                        breakpoint()
                     # print(f"hidden_dims {hidden_dims}")
 
                     nsc = copy.deepcopy(sc)
@@ -129,6 +134,7 @@ def get_grid_cfgs(base_config, hypers, mode, eval_hypers={}):
                     setattr(nsc, 'arf_size', obs_size)
                     setattr(nsc, 'vrf_size', obs_size)
                     setattr(nsc, 'hidden_dims', hidden_dims)
+                    setattr(nsc, 'obs_size_hid_dims', obs_size)
                     new_subconfigs.append(nsc)
             subconfigs = new_subconfigs
 
@@ -171,8 +177,10 @@ def seq_main(main_fn, sweep_configs):
 
 @hydra.main(version_base="1.3", config_path='./', config_name='batch_pcgrl')
 def sweep_main(cfg: SweepConfig):
-    if cfg.mode == 'plot' or not am_on_hpc():
-        cfg.slurm = False
+    # if cfg.mode == 'plot' or not am_on_hpc():
+    #     cfg.slurm = False
+    load_dotenv()
+    slurm_account = os.getenv("SLURM_ACCOUNT")
 
     if cfg.name is not None:
         _hypers, _eval_hypers = load_sweep_hypers(cfg)
@@ -186,7 +194,7 @@ def sweep_main(cfg: SweepConfig):
 
         sweep_name = _hypers[0]['NAME']
     
-    cfg.multiagent = _hypers[0]['multiagent']
+    cfg.multiagent = _hypers[0].get('multiagent', False)
 
 
     # This is a hack. Would mean that we can't overwrite trial-specific settings
@@ -204,8 +212,6 @@ def sweep_main(cfg: SweepConfig):
         default_config = TrainConfig()
         main_fn = main_plot
     elif cfg.mode == 'enjoy':
-        default_config = EnjoyConfig()
-        main_fn = main_enjoy
         if cfg.multiagent:
             main_fn = partial(main_eval_ma, render=True)
             # main_fn = main_enjoy_ma
@@ -219,13 +225,10 @@ def sweep_main(cfg: SweepConfig):
     elif cfg.mode == 'eval_cp':
         default_config = EvalConfig()
         main_fn = main_eval_cp
-    # elif cfg.mode == 'eval_diff_size':
-    #     default_config = EvalConfig()
-    #     main_fn = main_eval_diff_size
     elif cfg.mode == 'eval':
         if cfg.multiagent:
             main_fn = main_eval_ma
-            default_config = MultiAgentEvalConfig()
+            default_config = EvalMultiAgentConfig()
         else:
             default_config = EvalConfig()
             main_fn = main_eval
@@ -245,60 +248,59 @@ def sweep_main(cfg: SweepConfig):
 
         # Launch rendering sweep on SLURM
         if cfg.mode == 'enjoy':
-            executor = submitit.AutoExecutor(folder='submitit_logs')
+            executor = submitit.AutoExecutor(folder=os.path.join('submitit_logs', 'enjoy'))
             executor.update_parameters(
-                    job_name=f"{sweep_name}_enjoy",
+                    slurm_job_name=f"enjoy_{sweep_name}",
                     mem_gb=90,
                     tasks_per_node=1,
                     cpus_per_task=1,
-                    gpus_per_node=1,
+                    slurm_gres='gpu:1',
                     timeout_min=60,
-                    slurm_account='pr_174_tandon_advanced',
-                )
-            return executor.submit(seq_main, main_fn, sweep_configs)
+                    slurm_account=slurm_account,
+            )
+            # return executor.submit(seq_main, main_fn, sweep_configs)
+            return executor.map_array(main_fn, sweep_configs)
         
         elif cfg.mode == 'get_traces':
-            executor = submitit.AutoExecutor(folder='submitit_logs')
+            executor = submitit.AutoExecutor(folder=os.path.join('submitit_logs', 'get_traces'))
             executor.update_parameters(
-                    job_name=f"{sweep_name}_get_traces",
+                    slurm_job_name=f"{sweep_name}_get_traces",
                     mem_gb=90,
                     tasks_per_node=1,
                     cpus_per_task=1,
-                    gpus_per_node=1,
+                    slurm_gres='gpu:1',
                     timeout_min=60,
-                    slurm_account='pr_174_general',
-                )
+                    slurm_account=slurm_account,
+            )
             return executor.submit(seq_main, main_fn, sweep_configs)
 
         # Launch eval sweep on SLURM
         elif cfg.mode.startswith('eval'):
-            executor = submitit.AutoExecutor(folder='submitit_logs')
+            executor = submitit.AutoExecutor(folder=os.path.join('submitit_logs', 'eval'))
             executor.update_parameters(
                     slurm_job_name=f"eval_{sweep_name}",
                     mem_gb=30,
                     tasks_per_node=1,
                     cpus_per_task=1,
                     timeout_min=120,
-                    # gpus_per_node=1,
                     slurm_gres='gpu:1',
-                    slurm_account='pr_174_tandon_advanced',
+                    slurm_account=slurm_account,
                 )
             pprint.pprint(sweep_configs)
             return executor.map_array(main_fn, sweep_configs)
 
         # Launch training sweep on SLURM
         elif cfg.mode == 'train':
-            executor = submitit.AutoExecutor(folder='submitit_logs')
+            executor = submitit.AutoExecutor(folder=os.path.join('submitit_logs', 'train'))
             executor.update_parameters(
-                    job_name=f"{sweep_name}_train",
+                    slurm_job_name=f"train_{sweep_name}",
                     mem_gb=30,
                     tasks_per_node=1,
                     cpus_per_task=1,
                     timeout_min=1440,
-                    # gpus_per_node=1,
-                    slurm_gres='gpu:rtx8000:1',
+                    slurm_gres='gpu:1',
                     # partition='rtx8000',
-                    slurm_account='pr_174_tandon_advanced',
+                    slurm_account=slurm_account,
                 )
             # Pretty print all configs to be executed
             pprint.pprint(sweep_configs)

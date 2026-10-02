@@ -8,14 +8,17 @@ from typing import Iterable
 import hydra
 import matplotlib.pyplot as plt
 import numpy as np
+from omegaconf import OmegaConf
 import pandas as pd
 import wandb
 import yaml
+from scipy import stats
 
-from conf.config import EvalConfig, MultiAgentEvalConfig, SweepConfig, TrainConfig
+from conf.config import EvalConfig, EvalMultiAgentConfig, SweepConfig, TrainConfig
 from eval import get_eval_name
 from eval_change_pct import EvalData, get_change_pcts
-from sweep import get_grid_cfgs, eval_hypers
+from utils_ma import ma_init_config
+from sweep import get_grid_cfgs, eval_hypers, get_sweep_cfgs
 from utils import get_sweep_conf_path, init_config, load_sweep_hypers, write_sweep_confs
 
 
@@ -48,16 +51,12 @@ def cross_eval_main(cfg: SweepConfig):
         _eval_hypers = eval_hypers
         write_sweep_confs(_hypers, _eval_hypers)
     
-    for grid_hypers in _hypers:
-        sweep_grid(cfg, grid_hypers, _eval_hypers)
+    sweep_grid(cfg, _hypers, _eval_hypers)
 
 
-def sweep_grid(cfg, grid_hypers, _eval_hypers):
-    if grid_hypers['multiagent']:
-        default_cfg = MultiAgentEvalConfig(multiagent=True)
-    else:
-        default_cfg = EvalConfig()
-    sweep_configs = get_grid_cfgs(default_cfg, grid_hypers, mode='eval', eval_hypers=_eval_hypers)
+def get_sweep_configs(default_cfg, grid_hypers, _eval_hypers, mode):
+    sweep_configs = get_sweep_cfgs(default_cfg, grid_hypers, mode=mode, eval_hypers=_eval_hypers)
+    sweep_configs = [OmegaConf.create(sc) for sc in sweep_configs]
     sweep_configs = [init_config(sc) for sc in sweep_configs]
 
     for sc in sweep_configs:
@@ -66,27 +65,41 @@ def sweep_grid(cfg, grid_hypers, _eval_hypers):
                 if v == -1:
                     setattr(sc, k, sc.map_width * 2 - 1)
 
+    return sweep_configs
+
+
+def sweep_grid(cfg: SweepConfig, grid_hypers, _eval_hypers):
+    if grid_hypers[0].get('multiagent', False):
+        default_cfg = EvalMultiAgentConfig(multiagent=True)
+    else:
+        default_cfg = EvalConfig()
+
+    train_sweep_configs = get_sweep_configs(default_cfg, grid_hypers, _eval_hypers, mode='train')
+    eval_sweep_configs = get_sweep_configs(default_cfg, grid_hypers, _eval_hypers, mode='eval')
+
     # FIXME: This part is messy, we have to assume we ran the eval with the 
     #  default params as defined in the class below. We should probably save
     #  the eval config in the eval directory.
     eval_config = EvalConfig()
+    init_config(eval_config)
 
-    name = grid_hypers.pop('NAME') if 'NAME' in grid_hypers else 'default'
+    name = grid_hypers[0].get('NAME', 'default')
+    [gh.pop('NAME') for gh in grid_hypers]
 
     # Save the eval config to a yaml at `conf/sweeps/{name}.yaml`        
 
     if 'eval_map_width' in grid_hypers:      # if we are sweeping over eval_map_width
-        cross_eval_diff_size(name=name, sweep_configs=sweep_configs,
+        cross_eval_diff_size(name=name, sweep_configs=eval_sweep_configs,
                         eval_config=eval_config, hypers=grid_hypers)
     else:
         os.makedirs(os.path.join(CROSS_EVAL_DIR, name), exist_ok=True)
-        cross_eval_misc(name=name, sweep_configs=sweep_configs,
+        cross_eval_misc(name=name, sweep_configs=train_sweep_configs,
                         eval_config=eval_config, hypers=grid_hypers)
-        cross_eval_basic(name=name, sweep_configs=sweep_configs,
+        cross_eval_basic(name=name, sweep_configs=eval_sweep_configs,
                         eval_config=eval_config, hypers=grid_hypers, eval_hypers=_eval_hypers)
         
         if name.startswith('cp_'):
-            cross_eval_cp(sweep_name=name, sweep_configs=sweep_configs,
+            cross_eval_cp(sweep_name=name, sweep_configs=train_sweep_configs,
                         eval_config=eval_config)
 
 
@@ -216,7 +229,8 @@ def cross_eval_basic(name: str, sweep_configs: Iterable[SweepConfig],
     col_headers.insert(METRIC_COL_TPL_IDX, '')
     col_indices = set({})
 
-    row_headers = [tuple(v) if isinstance(v, list) else v for v in list(hypers.keys())]
+    row_headers = []
+    row_headers = [tuple(v) if isinstance(v, list) else v for v in list(hypers[0].keys())]
     row_indices = []
     row_vals = []
 
@@ -225,20 +239,17 @@ def cross_eval_basic(name: str, sweep_configs: Iterable[SweepConfig],
     # for exp_dir, stats in basic_stats.items():
     for sc in sweep_configs:
 
-        sweep_eval_configs = [copy.deepcopy(sc)]
+        sweep_eval_configs = []
 
         # Do this so that we can get the correct stats file depending on eval parameters
         # sc = init_config_for_eval(sc)
 
         # For each train config, also sweep over eval params to get all the relevant stats
         for eval_hyper_combo in eval_hyper_combos:
-            new_sweep_eval_configs = copy.deepcopy(sweep_eval_configs)
-            for sec in sweep_eval_configs:
-                new_sec = copy.deepcopy(sec)
-                for k, v in zip(eval_hyper_ks, eval_hyper_combo):
-                    setattr(new_sec, k, v)
-                new_sweep_eval_configs.append(new_sec)
-            sweep_eval_configs = new_sweep_eval_configs
+            new_sec = copy.deepcopy(sc)
+            for k, v in zip(eval_hyper_ks, eval_hyper_combo):
+                setattr(new_sec, k, v)
+            sweep_eval_configs.append(new_sec)
         
         row_tpl = tuple(getattr(sc, k) for k in row_headers)
         row_tpl = tuple(tuple(v) if isinstance(v, list) else v for v in row_tpl)
@@ -247,10 +258,13 @@ def cross_eval_basic(name: str, sweep_configs: Iterable[SweepConfig],
         vals = {}
         for sec in sweep_eval_configs:
             sec_col_tpl = [getattr(sec, k) for k in eval_hyper_ks]
-            print(sc.exp_dir)
+            print(f"Collecting eval metrics from: {sc.exp_dir}")
             sc_stats = json.load(open(
                 os.path.join(f'{sc.exp_dir}', 
-                            'stats' + get_eval_name(sec, sec) + '.json')))
+                            'stats' + get_eval_name(sec, sc) + '.json')))
+            if 'prob_stats' in sc_stats:
+                prob_stats = sc_stats.pop('prob_stats')
+                sc_stats.update(prob_stats)
             for k, v in sc_stats.items():
                 col_tpl = copy.deepcopy(sec_col_tpl)
                 col_tpl.insert(METRIC_COL_TPL_IDX, k)
@@ -349,6 +363,7 @@ def cross_eval_basic(name: str, sweep_configs: Iterable[SweepConfig],
     
     # Drop these columns
     basic_stats_concise_df = basic_stats_concise_df.droplevel(col_levels_to_drop, axis=1)
+    basic_stats_df = basic_stats_df.droplevel(col_levels_to_drop, axis=1)
 
     # Drop the `n_parameters` `n_eval_eps` metrics, and others if `metrics_to_keep` is specified
     for col_tpl in basic_stats_concise_df.columns:
@@ -358,8 +373,84 @@ def cross_eval_basic(name: str, sweep_configs: Iterable[SweepConfig],
             metric_str = col_tpl[METRIC_COL_TPL_IDX]
         if metric_str == 'n_parameters' or metric_str == 'n_eval_eps':
             basic_stats_concise_df = basic_stats_concise_df.drop(columns=col_tpl)
+            basic_stats_df = basic_stats_df.drop(columns=col_tpl)
         elif _metrics_to_keep is not None and metric_str not in _metrics_to_keep:
             basic_stats_concise_df = basic_stats_concise_df.drop(columns=col_tpl)
+            basic_stats_df = basic_stats_df.drop(columns=col_tpl)
+
+    # Compute pairwise p-values across groups (e.g., seeds grouped by hyperparameters) using Mann-Whitney U tests.
+    def _label_from_key(key, keys):
+        if not isinstance(key, tuple):
+            key = (key,)
+        return ",".join(f"{k}={v}" for k, v in zip(keys, key) if k not in row_levels_to_drop)
+
+    def compute_pairwise_mannwhitney_pvalues(df: pd.DataFrame) -> pd.DataFrame:
+        # Group rows by all index levels except 'seed'; each group's distribution is values over seeds
+        group_levels = [lvl for lvl in df.index.names if lvl != 'seed']
+        if len(group_levels) == 0:
+            raise ValueError("Expected a 'seed' level in the index to form distributions per group.")
+
+        results = []
+        grouped = df.groupby(group_levels, dropna=False)
+        group_keys = list(grouped.groups.keys())
+        if len(group_keys) < 2:
+            return pd.DataFrame(columns=[
+                'metric', 'group_a', 'group_b', 'n_a', 'n_b', 'stat', 'pvalue'
+            ])
+
+        # For each column (metric/eval setting), compute pairwise tests across all groups
+        for col in df.columns:
+            # Collect distributions per group
+            group_to_vals = {}
+            for gk, gdf in grouped:
+                s = gdf[col]
+                vals = pd.Series(s).dropna().to_numpy()
+                group_to_vals[gk] = vals
+
+            # Pairwise comparisons
+            from itertools import combinations
+            for g1, g2 in combinations(group_keys, 2):
+                a = group_to_vals.get(g1, np.array([]))
+                b = group_to_vals.get(g2, np.array([]))
+                na, nb = a.size, b.size
+                if na == 0 or nb == 0:
+                    stat, p = np.nan, np.nan
+                else:
+                    try:
+                        stat, p = stats.mannwhitneyu(a, b, alternative='two-sided', method='auto')
+                    except TypeError:
+                        stat, p = stats.mannwhitneyu(a, b, alternative='two-sided')
+
+                # Column label to a compact string (preserve metric name at METRIC_COL_TPL_IDX)
+                if isinstance(col, tuple):
+                    metric_label = col[METRIC_COL_TPL_IDX]
+                else:
+                    metric_label = col
+                results.append({
+                    'metric': metric_label,
+                    'column': str(col),
+                    'group_a': _label_from_key(g1, group_levels),
+                    'group_b': _label_from_key(g2, group_levels),
+                    'n_a': na,
+                    'n_b': nb,
+                    'stat': float(stat) if np.isfinite(stat) else np.nan,
+                    'pvalue': float(p) if np.isfinite(p) else np.nan,
+                })
+        return pd.DataFrame(results)
+
+    # Include eval sweep name to disambiguate different eval settings
+    eval_sweep_name = ('eval_' + '_'.join(k.strip('eval_') for k, v in eval_hypers.items() if len(v) > 1 and k != 'metrics_to_keep') if 
+                        len(eval_hypers) > 0 else '')
+
+    pvals_df = compute_pairwise_mannwhitney_pvalues(basic_stats_df)
+    if not pvals_df.empty:
+        pvals_df['significant_0.05'] = pvals_df['pvalue'] <= 0.05
+        os.makedirs(os.path.join(CROSS_EVAL_DIR, name), exist_ok=True)
+        csv_path = os.path.join(CROSS_EVAL_DIR, name, f"{eval_sweep_name}_pairwise_pvalues.csv")
+        md_path = os.path.join(CROSS_EVAL_DIR, name, f"{eval_sweep_name}_pairwise_pvalues.md")
+        pvals_df.to_csv(csv_path, index=False)
+        with open(md_path, 'w') as f:
+            f.write(pvals_df.to_markdown(index=False))
 
     # Save the dataframe to a csv
     # basic_stats_concise_df.to_csv(os.path.join(CROSS_EVAL_DIR,
@@ -396,58 +487,76 @@ def cross_eval_basic(name: str, sweep_configs: Iterable[SweepConfig],
     print(f"Basic stats for {name} saved to {CROSS_EVAL_DIR}/{name}.")
 
         
-def cross_eval_misc(name: str, sweep_configs: Iterable[SweepConfig],
+def cross_eval_misc(name: str, sweep_configs: Iterable[TrainConfig],
 
                     eval_config: EvalConfig, hypers):
 
     # Create a dataframe with miscellaneous stats for each experiment
-    row_headers = list(hypers.keys())
+    row_headers = list(hypers[0].keys())
     row_indices = []
     row_vals = []
 
-    # Create a list of lists to show curves of metrics (e.g. reward) over the 
-    # course of training (i.e. as would be logged by tensorboard)
-    row_vals_curves = []
-    all_timesteps = []
+    # For plotting curves, collect ALL numeric metrics from wandb for each run, aligned by timesteps.
+    # metric_data: metric_name -> { 'series': [pd.Series], 'timesteps': [pd.Series], 'row_index': [tuple] }
+    metric_data = {}
 
     wandb_api = wandb.Api()
 
     for sc in sweep_configs:
+        if sc.multiagent:
+            ma_init_config(sc)
+        else:
+            init_config(sc)
         exp_dir = sc.exp_dir
         
         # Load the `progress.csv`
         csv_path = os.path.join(exp_dir, 'progress.csv')
-        if not os.path.isfile(csv_path):
-            with open(os.path.join(exp_dir, 'wandb_run_id.txt'), 'r') as f:
-                wandb_run_id = f.read()
-            sc_run = wandb_api.run(f'/{MultiAgentEvalConfig.PROJECT}/{wandb_run_id}')
-            train_metrics = sc_run.history()
-            train_metrics = train_metrics.sort_values(by='env_step', ascending=True)
-            max_timestep = train_metrics['env_step'].max()
-            if 'returns' not in train_metrics:
-                breakpoint()
-            ep_returns = train_metrics['returns']
-            sc_timesteps = train_metrics['env_step']
-        else:
-            train_metrics = pd.read_csv(csv_path)
-            train_metrics = train_metrics.sort_values(by='timestep', ascending=True)
+        wandb_path = os.path.join(exp_dir, 'wandb_run_id.txt')
+        if not (os.path.isfile(csv_path) or os.path.isfile(wandb_path)):
+            print(f"Skipping {exp_dir} as it does not have a progress.csv or wandb-run-id.txt file.")
+            continue
+        # Load wandb history
+        print(f"Loading wandb run for {sc.exp_dir}...")
+        with open(wandb_path, 'r') as f:
+            wandb_run_id = f.read()
+        try:
+            sc_run = wandb_api.run(f'/{sc.wandb_project}/{wandb_run_id}')
+        except wandb.errors.CommError:
+            wandb_run_dirs = os.listdir(os.path.join(exp_dir, 'wandb'))
+            for d in wandb_run_dirs:
+                if d.startswith(f'run-{wandb_run_id}'):
+                    os.system(f'wandb sync {os.path.join(exp_dir, "wandb", d)}')
 
-            # misc_stats_path = os.path.join(exp_dir, 'misc_stats.json')
-            # if os.path.exists(misc_stats_path):
-            #     sc_stats = json.load(open(f'{exp_dir}/misc_stats.json'))
-            # else:
-            max_timestep = train_metrics['timestep'].max()
+        train_metrics = sc_run.history()
+        timestep_key = 'timestep' if 'timestep' in train_metrics else '_step'
+        if timestep_key not in train_metrics:
+            print(f"Skipping {exp_dir} as it does not have _step or timestep in wandb history.")
+            continue
+        # Determine the x-axis for alignment
+        train_metrics = train_metrics.sort_values(by=timestep_key, ascending=True)
+        sc_timesteps = train_metrics[timestep_key]
+        max_timestep = sc_timesteps.max()
 
-            ep_returns = train_metrics['ep_return']
-            sc_timesteps = train_metrics['timestep']
+        # Identify numeric metric columns to plot (exclude internal step/time columns)
+        numeric_cols = train_metrics.select_dtypes(include=[np.number]).columns.tolist()
+        exclude_cols = set(['_step', '_timestamp', '_runtime', 'timestep'])
+        metric_cols = [c for c in numeric_cols if c not in exclude_cols]
 
-        row_vals_curves.append(ep_returns)
-        all_timesteps.append(sc_timesteps)
-
-        sc_stats = {'n_timesteps_trained': max_timestep}
-
+        # Record per-metric series and associated row index for grouping
         row_tpl = tuple(getattr(sc, k) for k in row_headers)
         row_tpl = tuple(tuple(v) if isinstance(v, list) else v for v in row_tpl)
+        for m in metric_cols:
+            series_vals = train_metrics[m]
+            # Skip all-NaN columns
+            if pd.Series(series_vals).dropna().empty:
+                continue
+            if m not in metric_data:
+                metric_data[m] = {'series': [], 'timesteps': [], 'row_index': []}
+            metric_data[m]['series'].append(series_vals)
+            metric_data[m]['timesteps'].append(sc_timesteps)
+            metric_data[m]['row_index'].append(row_tpl)
+
+        sc_stats = {'n_timesteps_trained': max_timestep}
         row_indices.append(row_tpl)
         
         vals = {}
@@ -489,7 +598,7 @@ def cross_eval_misc(name: str, sweep_configs: Iterable[SweepConfig],
 
     # Now, remove all row indices that have the same value across all rows
     levels_to_drop = \
-        [level for level in misc_stats_mean_df.index.names if 
+       [level for level in misc_stats_mean_df.index.names if 
          misc_stats_mean_df.index.get_level_values(level).nunique() == 1]
     levels_to_keep = \
         [level for level in misc_stats_mean_df.index.names if
@@ -516,118 +625,92 @@ def cross_eval_misc(name: str, sweep_configs: Iterable[SweepConfig],
         f.write(styled_misc_stats_concise_df.to_latex())
 
 
-    def interpolate_returns(ep_returns, timesteps, all_timesteps):
-        # Group by timesteps and take the mean for duplicate values
-        ep_returns = pd.Series(ep_returns).groupby(timesteps).mean()
-        timesteps = np.unique(timesteps)
-        timesteps = timesteps[~np.isnan(timesteps)]
-        
-        # Create a Series with the index set to the unique timesteps of the ep_returns
-        indexed_returns = pd.Series(ep_returns.values, index=timesteps)
-        
-        # Reindex the series to include all timesteps, introducing NaNs for missing values
-        indexed_returns = indexed_returns.reindex(all_timesteps)
-        
-        # Interpolate missing values, ensuring forward fill to handle right edge
-        interpolated_returns = indexed_returns.interpolate(method='linear', limit_direction='backward', axis=0)
-        
-        return interpolated_returns
+    def _sanitize_metric_name(m: str) -> str:
+        return str(m).replace('/', '_').replace(' ', '_')
 
-    all_timesteps = np.sort(np.unique(np.concatenate(all_timesteps)))
+    def _interpolate_series(values, timesteps, all_timesteps):
+        # Group by timesteps and take the mean for duplicate values (rare)
+        s = pd.Series(values).groupby(timesteps).mean()
+        unique_ts = np.unique(timesteps)
+        unique_ts = unique_ts[~np.isnan(unique_ts)]
+        indexed = pd.Series(s.values, index=unique_ts)
+        # Align to the union grid and interpolate
+        indexed = indexed.reindex(all_timesteps)
+        interpolated = indexed.interpolate(method='linear', limit_direction='backward', axis=0)
+        return interpolated
 
-    row_vals_curves = []
-    for i, sc in enumerate(sweep_configs):
-        if hasattr(sc, "obs_size"):
-            if sc.obs_size == -1:
-                if eval_config.eval_map_width is not None:
-                    mw = eval_config.eval_map_width
-                else:
-                    mw = eval_config.map_width
-                # Why exactly is this necessary? And should we really be inheriting from *eval* map width?
-                sc.obs_size = mw * 2 - 1
-        exp_dir = sc.exp_dir
-        csv_path = os.path.join(exp_dir, 'progress.csv')
-        if not os.path.isfile(csv_path):
-            with open(os.path.join(exp_dir, 'wandb_run_id.txt'), 'r') as f:
-                wandb_run_id = f.read()
-            sc_run = wandb_api.run(f'/{MultiAgentEvalConfig.PROJECT}/{wandb_run_id}')
-            train_metrics = sc_run.history()
-            train_metrics = train_metrics.sort_values(by='env_step', ascending=True)
-            ep_returns = train_metrics['returns']
-            sc_timesteps = train_metrics['env_step']
-
-        else:
-            train_metrics = pd.read_csv(csv_path)
-            train_metrics = train_metrics.sort_values(by='timestep', ascending=True)
-            
-            ep_returns = train_metrics['ep_return']
-            sc_timesteps = train_metrics['timestep']
-        interpolated_returns = interpolate_returns(ep_returns, sc_timesteps, all_timesteps)
-        row_vals_curves.append(interpolated_returns)
-
-    # Now, each element in row_vals_curves is a Series of interpolated returns
-    metric_curves_df = pd.DataFrame({i: vals for i, vals in enumerate(row_vals_curves)}).T
-    metric_curves_df.columns = all_timesteps
-    metric_curves_df.index = row_index
-    metric_curves_mean = metric_curves_df.groupby(group_row_indices).mean()
-    metric_curves_mean = metric_curves_mean.droplevel(levels_to_drop)
-
-    # Create a line plot of the metric curves w.r.t. timesteps. Each row in the
-    # column corresponds to a different line
-    fig, ax = plt.subplots(
-        # figsize=(20, 10)
-    )
-    for i, row in metric_curves_df.iterrows():
-        ax.plot(row, label=str(i))
-    ax.set_xlabel('Timesteps')
-    ax.set_ylabel('Return')
-    # ax.legend()
-    plt.savefig(os.path.join(CROSS_EVAL_DIR, name, f"metric_curves.png"))
-
-    fig, ax = plt.subplots()
-    # cut off the first and last 100 timesteps to remove outliers
-    metric_curves_mean = metric_curves_mean.drop(columns=metric_curves_mean.columns[:25])
-    metric_curves_mean = metric_curves_mean.drop(columns=metric_curves_mean.columns[-25:])
-    columns = copy.deepcopy(metric_curves_mean.columns)
-    # columns = columns[100:-100]
-    for i, row in metric_curves_mean.iterrows():
-
-        if len(row) == 0:
+    # Generate per-metric plots
+    os.makedirs(os.path.join(CROSS_EVAL_DIR, name), exist_ok=True)
+    for metric_name, payload in metric_data.items():
+        series_list = payload['series']
+        ts_list = payload['timesteps']
+        idx_list = payload['row_index']
+        if len(series_list) == 0:
             continue
 
-        # Apply a convolution to smooth the curve
-        row = np.convolve(row, np.ones(10), 'same') / 10
-        # row = row[100:-100]
-        # row = np.convolve(row, np.ones(10), 'valid') / 10
-        # turn it back into a pandas series
-        row = pd.Series(row, index=columns)
-        
-        # drop the first 100 timesteps to remove outliers caused by conv
-        if row.index.shape[0] > 100:
-            row = row.drop(row.index[:25])
-            row = row.drop(row.index[-25:])
+        # Build a global timestep grid for this metric
+        all_ts = np.sort(np.unique(np.concatenate([np.array(ts) for ts in ts_list])))
+        interp_rows = []
+        for vals, ts in zip(series_list, ts_list):
+            interp_rows.append(_interpolate_series(vals, ts, all_ts))
 
-        
+        # Assemble DataFrame for this metric
+        metric_df = pd.DataFrame({i: vals for i, vals in enumerate(interp_rows)}).T
+        metric_df.columns = all_ts
+        metric_df.index = pd.MultiIndex.from_tuples(idx_list, names=row_headers)
 
-        ax.plot(row, label=str(i))
-    metric_curves_mean.columns = columns
-    ax.set_xlabel('Timesteps')
-    ax.set_ylabel('Return')
+        metric_mean = metric_df.groupby(group_row_indices).mean().droplevel(levels_to_drop)
+        metric_std = metric_df.groupby(group_row_indices).std().droplevel(levels_to_drop)
 
-    # To get the ymin, drop the first timesteps where there tend to be outliers
-    if metric_curves_mean.shape[1] > 100:
-        ymin = metric_curves_mean.drop(columns=metric_curves_mean.columns[:100]).min().min()
-    else:
-        ymin = metric_curves_mean.drop(columns=metric_curves_mean.columns).min().min()
+        if metric_mean.empty:
+            continue
 
-    # Can manually set these bounds to tweak the visualization
-    # ax.set_ylim(ymin, 1.1 * np.nanmax(metric_curves_mean))
+        # Smooth and trim edges to reduce convolution artifacts/outliers
+        # If too few columns, skip trimming safely
+        trim_n = 0 if metric_mean.shape[1] > 50 else 0
+        if trim_n > 0:
+            metric_mean = metric_mean.drop(columns=metric_mean.columns[:trim_n])
+            metric_mean = metric_mean.drop(columns=metric_mean.columns[-trim_n:])
+            metric_std = metric_std.drop(columns=metric_std.columns[:trim_n])
+            metric_std = metric_std.drop(columns=metric_std.columns[-trim_n:])
 
-    legend_title = ', '.join(levels_to_keep).replace('_', ' ')
-    ax.legend(title=legend_title)
-    plt.savefig(os.path.join(CROSS_EVAL_DIR, name, f"{name}_metric_curves_mean.png"))
+        columns = copy.deepcopy(metric_mean.columns)
 
-    print(f"Misc stats for {name} saved to {CROSS_EVAL_DIR}/{name}.")
+        fig, ax = plt.subplots()
+        ax.set_xlabel('Timesteps')
+        ax.set_ylabel(metric_name.replace('_', ' '))
+
+        for ((i, row), (_, row_std)) in zip(metric_mean.iterrows(), metric_std.iterrows()):
+            if len(row) == 0:
+                continue
+            # Smooth with simple moving average
+            n_smooth = 1
+            row = np.convolve(row, np.ones(n_smooth), 'same') / n_smooth
+            row_std = np.convolve(row_std, np.ones(n_smooth), 'same') / n_smooth
+            row = pd.Series(row, index=columns)
+            if row.index.shape[0] > 2 * trim_n and trim_n > 0:
+                row = row.drop(row.index[:trim_n])
+                row = row.drop(row.index[-trim_n:])
+                row_std = row_std.drop(row_std.index[:trim_n])
+                row_std = row_std.drop(row_std.index[-trim_n:])
+            ax.plot(row, label=str(i))
+            ax.fill_between(
+                row.index,
+                row - row_std,
+                row + row_std,
+                alpha=0.2,
+                color=ax.get_lines()[-1].get_color(),
+                linewidth=0.5,
+                linestyle='--',
+            )
+
+        legend_title = ', '.join(levels_to_keep).replace('_', ' ')
+        ax.legend(title=legend_title)
+        out_name = f"{name}_curves_mean_{_sanitize_metric_name(metric_name)}.png"
+        plt.savefig(os.path.join(CROSS_EVAL_DIR, name, out_name))
+        plt.close(fig)
+
+    print(f"Misc stats and metric curves for {name} saved to {CROSS_EVAL_DIR}/{name}.")
 
 
 def cross_eval_cp(sweep_name: str, sweep_configs: Iterable[SweepConfig],

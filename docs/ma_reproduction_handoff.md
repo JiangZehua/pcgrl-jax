@@ -52,7 +52,7 @@ Togelius, AIIDE 2025）里**有代表性、效果最好**的设置，外加两�
   `train.py`（含 GIF 渲染）；用 `train_ma.py` 训练 binary 3 个智能体、binary 20 个智能体、dungeon 3 个智能体，
   以及 binary 在 32×32 上 3 个智能体（全部为 conv2，3×3 观察）；三个 sweep 都能正确展开。
   **还没有在 GPU 上跑过。**
-- 已知问题：`train_ma.py` 用 `model=rnn`（`MultiAgentConfig` 的默认值）时，在 GAE 的 scan 那一步会报
+- 已知问题：`train_ma.py` 用 `model=rnn` 时（`MultiAgentConfig` 的默认值原本是 rnn，现已改为 conv2），在 GAE 的 scan 那一步会报
   `float32[N]` 和 `float32[1,N]` 形状不匹配。在原来的 conda 环境里也会出现，所以是代码原本就有的问题，不影响本计划
   （本计划全部用 conv2）。
 

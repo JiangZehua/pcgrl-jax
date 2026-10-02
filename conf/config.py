@@ -145,7 +145,7 @@ class MultiAgentConfig(TrainConfig):
     # vf_coef: float = 0.5
     # max_grad_norm: float = 0.25
 
-    model: str = 'rnn'
+    model: str = 'conv2'
     representation: str = "turtle"
     n_agents: int = 2
     n_envs: int = 400

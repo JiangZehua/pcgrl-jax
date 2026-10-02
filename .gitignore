@@ -8,6 +8,7 @@ _saves*
 old_saves/
 log
 venv
+.venv/
 
 .env
 .vscode
@@ -18,3 +19,4 @@ user_defined_freezies/*.npy
 wandb/
 .ipynb_checkpoints/
 .DS_Store
+presentation_gifs/

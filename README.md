@@ -15,19 +15,19 @@ This repository contains the code for the two papers listed in [Citation](#citat
 
 ## Installation
 
-```bash
-pip install -r requirements.txt
-```
-
-Then [install JAX](https://jax.readthedocs.io/en/latest/installation.html) for your hardware, e.g. for CUDA 12:
+Dependencies are managed with [uv](https://docs.astral.sh/uv/) (`pyproject.toml` + `uv.lock`, Python 3.12):
 
 ```bash
-pip install -U "jax[cuda12]"
+uv sync --extra cuda12   # NVIDIA GPU (CUDA 12)
+uv sync                  # CPU only
 ```
 
-`req312.txt` holds a fully pinned environment (Python 3.12, JAX 0.6) that we know works.
+This creates `.venv/`. Run scripts either with `uv run python train.py ...` or after `source .venv/bin/activate`.
+The commands below assume the environment is activated.
 
-Logging uses [Weights & Biases](https://wandb.ai). Pass `wandb_mode=disabled` to turn it off.
+If you can't use uv, `uv export --extra cuda12 --no-hashes -o requirements.txt` gives a pinned file for `pip`.
+
+Logging uses [Weights & Biases](https://wandb.ai). Pass `wandb_mode=disabled` (or `offline`) to turn it off.
 
 ## Quick start
 
@@ -126,6 +126,7 @@ Sweeps prefixed with `ma_` are the multi-agent experiments (AIIDE 2025). The oth
 ├── user_defined_freezies/      # Hand-made eval maps with frozen tiles
 ├── webapp/                     # Flask demo for interacting with trained generators
 ├── experimental/               # Unmaintained prototypes, see experimental/README.md
+├── docs/                       # Notes and experiment plans
 ├── results/                    # Small result files kept under version control
 └── scripts/hpc/                # Helpers for interactive SLURM sessions
 ```

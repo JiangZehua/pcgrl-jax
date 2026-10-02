@@ -244,6 +244,8 @@ def init_config_for_eval(config):
         config.max_board_scans = config.eval_max_board_scans
     if config.eval_randomize_map_shape is not None:
         config.randomize_map_shape = config.eval_randomize_map_shape
+    if config.eval_full_start is not None:
+        config.full_start = config.eval_full_start
     return config
 
 
@@ -262,6 +264,7 @@ def get_eval_name(eval_config: EvalMultiAgentConfig, train_config: TrainConfig):
          else "") + \
         (f"_w-{eval_config.eval_map_width}" if eval_config.eval_map_width is not None else "") + \
         (f"_bs-{eval_config.eval_max_board_scans}" if eval_config.eval_max_board_scans is not None else "") + \
+        ("_full-start" if eval_config.eval_full_start else "") + \
         (f"_seed-{eval_config.eval_seed}" if eval_config.eval_seed is not None else "")
     return eval_name
 
